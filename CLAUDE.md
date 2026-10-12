@@ -325,6 +325,12 @@ functions. Accept: the game is playable start to finish.
   entry" and dumps the stack on `DeleteLocalRef` of a transition reference. `HostJni` brackets
   native calls with `PushLocalFrame`/`PopLocalFrame` instead; the mock JVM reports such
   deletions as errors.
+- **`libOpenSLES.so` is guest code, not trap stubs** (`guest/opensles/zbopensles.c`). OpenSL ES
+  is reached through interface vtables, so `gen_stubs.py` cannot serve it. It is silent for
+  now: buffer queue players consume buffers in real time and call their callback, URI/fd
+  players keep state and position, decoding to a buffer queue is refused. `build_guest.sh`
+  fails if it lacks any export (or symbol version) of the NDK stub
+  (`tools/check_opensles_exports.py`); `opensles_dynamic` covers the behavior.
 - **JNI tables and host-call lists are generated.** `tools/gen_jni.py` writes
   `core/include/zb/jni_hostcalls.h`, `core/src/gen/jni_hostcalls.inc` and `guest/zbjni/gen/*`;
   never edit them by hand. `gen_jni_check` (ctest) fails when they are stale.

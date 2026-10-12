@@ -13,6 +13,7 @@
 #   guest/zbjni/zbjni.c         -> build/guest/lib/libzbjni.so (guest JNIEnv/JavaVM)
 #   guest/stubs/gen/*.S         -> build/guest/lib/<lib>.so host-call stub libraries
 #   guest/compat/zbcompat.c     -> build/guest/lib/libzbcompat.so
+#   guest/opensles/zbopensles.c -> build/guest/lib/libOpenSLES.so (silent OpenSL ES)
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -35,6 +36,8 @@ for src in "$ROOT"/guest/tests/*_dynamic.c; do
     name=$(basename "$src" .c)
     libs=-llog
     [ "$name" = zlib_dynamic ] && libs="$libs -lz"
+    # Links the NDK stub; at run time LD_LIBRARY_PATH selects ours from build/guest/lib.
+    [ "$name" = opensles_dynamic ] && libs="$libs -lOpenSLES"
     "$CC" -O2 -Wall -o "$OUT/$name" "$src" $libs
 done
 
@@ -90,6 +93,15 @@ done
     -L"$OUT/lib" -landroid
 
 "$CC" -shared -O2 -Wall -Wl,-soname,libzbcompat.so -o "$OUT/lib/libzbcompat.so" "$ROOT/guest/compat/zbcompat.c"
+
+# OpenSL ES is an interface/vtable API, so it is implemented in guest code rather than as
+# trap stubs. It must export everything the platform library does: one missing SL_IID_*
+# would stop a guest library from loading.
+"$CC" -shared -fPIC -O2 -Wall -Wextra -fvisibility=hidden -Wl,-soname,libOpenSLES.so \
+    -Wl,--version-script,"$ROOT/guest/opensles/libOpenSLES.map.txt" \
+    -o "$OUT/lib/libOpenSLES.so" "$ROOT/guest/opensles/zbopensles.c" -llog
+python3 "$ROOT/tools/check_opensles_exports.py" "$TOOLCHAIN/bin/llvm-nm" \
+    "$TOOLCHAIN/sysroot/usr/lib/arm-linux-androideabi/21/libOpenSLES.so" "$OUT/lib/libOpenSLES.so"
 
 # EGL/window probe for egl_chain_test (Phase 7a Task 9). Built as a shared library so
 # LibraryRuntime can dlopen it and call its "main" symbol directly, the same way the

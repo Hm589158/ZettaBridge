@@ -1,0 +1,7 @@
+LIBOPENSLES {
+  global:
+    sl*;
+    SL_IID_*;
+  local:
+    *;
+};

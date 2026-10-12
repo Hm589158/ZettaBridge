@@ -14,6 +14,7 @@ REQUIRED = {
     "assets/zb/guest/lib/libGLESv2.so": (1, 40),
     "assets/zb/guest/lib/libEGL.so": (1, 40),
     "assets/zb/guest/lib/libzbjni.so": (1, 40),
+    "assets/zb/guest/lib/libOpenSLES.so": (1, 40),
     "lib/arm64-v8a/libzbridge.so": (2, 183),
 }
 

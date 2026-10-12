@@ -1,0 +1,38 @@
+ok create engine
+ok realize engine
+ok engine itf
+ok query engine interfaces
+ok required reverb refused
+ok optional reverb skipped
+ok async realize
+ok no reverb interface
+ok create bq player
+ok realize bq player
+ok play itf
+ok bq itf
+ok volume itf
+ok set volume
+ok register bq callback
+ok enqueue 1
+ok enqueue 2
+ok queue full
+ok no callbacks while stopped
+ok play
+ok pause
+ok callbacks paced in real time
+ok no callbacks while paused
+ok bq state
+ok bq position
+bq player destroyed
+ok create uri player
+ok prefetch itf
+ok seek itf
+ok loop
+ok prefetch event
+ok sufficient data
+ok duration unknown
+ok uri position advances
+ok decoder refused
+ok recorder refused
+ok async realize callback
+done
