@@ -42,22 +42,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
-
-      - name: Set up Android SDK command-line tools
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 13114758
+          gradle-version: "8.11.1"
 
       - name: Install pinned SDK and NDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
-          echo "NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          # The ubuntu-24.04 image ships the Android SDK with cmdline-tools/latest.
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
           NDK="$ANDROID_HOME/ndk/29.0.14206865"
+          echo "NDK=$NDK" >> "$GITHUB_ENV"
           test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" || {
             echo 'NDK r29 linux-x86_64 toolchain unavailable.'
             exit 1
@@ -89,7 +87,7 @@ jobs:
             -DZB_BUILD_TESTS=OFF \
             -DBoost_INCLUDE_DIR="$GITHUB_WORKSPACE/build/boost-headers"
 
-          ninja -C build/android-arm64 zbridge
+          ninja -C build/android-arm64 zbridge zbproxy
 
           test -f build/android-arm64/core/libzbridge.so
           test -f build/android-arm64/core/libzbproxy.so
