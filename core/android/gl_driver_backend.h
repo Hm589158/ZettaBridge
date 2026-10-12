@@ -40,6 +40,15 @@ public:
 #include "zb/gl_ext_entries.inc"
 #undef ZB_GL_EXT_ENTRY
 
+    // The GLES 1.1 entry points GLES 2.0 does not share (glMatrixMode, glVertexPointer, ...).
+    // libzbridge.so links only libGLESv2.so, so each one is resolved from the platform's
+    // libGLESv1_CM.so on first use. They act on whatever context is current, which for a GLES 1
+    // guest is the GLES 1 context its GLSurfaceView created.
+#define ZB_GL_ES1_ENTRY(slot, name, result, declaration, types, arguments) \
+    result name declaration override;
+#include "zb/gl_es1_entries.inc"
+#undef ZB_GL_ES1_ENTRY
+
 protected:
     // Never called: every method above is overridden directly, matching the design ("The real
     // GlBackend calls the driver directly").
@@ -49,9 +58,12 @@ private:
     // The cached eglGetProcAddress result for extension slot `slot`, or nullptr when the driver
     // does not have it. Safe from any thread; resolving twice in a race is harmless.
     void* extension_entry(unsigned slot, const char* name);
+    // The same for GLES 1.1 slot `slot`, looked up in libGLESv1_CM.so.
+    void* es1_entry(unsigned slot, const char* name);
 
     GLenum pending_error_ = 0;  // GL_NO_ERROR
     std::array<std::atomic<void*>, kGlHostCallExtCount> extension_entries_{};
+    std::array<std::atomic<void*>, kGlHostCall1Count> es1_entries_{};
 };
 
 // The current EGLContext as an opaque integer. HostGl uses zero/nonzero for its top-level check

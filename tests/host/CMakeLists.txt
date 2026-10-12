@@ -8,6 +8,7 @@ set(ZB_HOST_TESTS
     hang_watchdog_test
     host_looper_test
     gles_client_arrays_test
+    gles1_test
     gles_marshal_test
     gles_pointer_test
     input_queue_test
@@ -43,6 +44,7 @@ target_sources(egl_marshal_test PRIVATE mock_egl.cpp)
 target_sources(gles_marshal_test PRIVATE mock_gles.cpp)
 target_sources(gles_pointer_test PRIVATE mock_gles.cpp)
 target_sources(gles_client_arrays_test PRIVATE mock_gles.cpp)
+target_sources(gles1_test PRIVATE mock_gles.cpp)
 
 # Proves GuestJniEngine chains a GlBackend's HostGl alongside HostJni (Phase 5 Task 8). Each mode
 # is its own process: HostJni (like the LibraryRuntime it lives in) is one per process.
