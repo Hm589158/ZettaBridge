@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.res.TypedArray;
 import android.os.Build;
 import android.util.Log;
+import android.view.Display;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -72,6 +73,8 @@ final class GuestWindowStyle {
             Log.w(TAG, "cannot read the plugin window theme: " + e);
         }
 
+        if (translated) limitRefreshRate(activity);
+
         // Requesting it here is the only thing that works: the feature has to be set before the
         // plugin's onCreate calls setContentView. A translated plugin is an old game, and those
         // expect no title bar at all; a 64-bit plugin keeps whatever its theme asks for.
@@ -94,6 +97,43 @@ final class GuestWindowStyle {
         decor.getViewTreeObserver().addOnWindowFocusChangeListener(focused -> {
             if (focused) hideSystemBars(activity);
         });
+    }
+
+    /**
+     * Asks for a 60 Hz display mode while a translated guest is in front.
+     *
+     * The 32-bit games we translate were written for 60 Hz screens, and many step their world once
+     * per rendered frame instead of by elapsed time. On a 120 Hz panel GLSurfaceView renders twice
+     * as often, so such a game runs at double speed (Pocket Army did, animations included). The
+     * mode keeps the current resolution; a device without a 60 Hz mode is left as it is.
+     */
+    @SuppressWarnings("deprecation")
+    private static void limitRefreshRate(Activity activity) {
+        Window window = activity.getWindow();
+        if (window == null) return;
+        try {
+            Display display = activity.getWindowManager().getDefaultDisplay();
+            Display.Mode current = display.getMode();
+            Display.Mode best = null;
+            for (Display.Mode mode : display.getSupportedModes()) {
+                if (mode.getPhysicalWidth() != current.getPhysicalWidth()
+                        || mode.getPhysicalHeight() != current.getPhysicalHeight()) {
+                    continue;
+                }
+                float rate = mode.getRefreshRate();
+                if (rate < 59f || rate > 61f) continue;
+                if (best == null || Math.abs(rate - 60f) < Math.abs(best.getRefreshRate() - 60f)) best = mode;
+            }
+            WindowManager.LayoutParams params = window.getAttributes();
+            if (best != null) params.preferredDisplayModeId = best.getModeId();
+            params.preferredRefreshRate = 60f;
+            window.setAttributes(params);
+            Log.i(TAG, "guest refresh rate: requested 60 Hz (mode "
+                    + (best != null ? best.getModeId() : "none") + ", current "
+                    + current.getRefreshRate() + " Hz)");
+        } catch (RuntimeException e) {
+            Log.w(TAG, "cannot limit the refresh rate: " + e);
+        }
     }
 
     @SuppressWarnings("deprecation")

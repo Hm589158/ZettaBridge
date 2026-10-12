@@ -361,6 +361,7 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
     };
     host_looper_ = new HostLooper(*runtime_, looper_backend, std::move(looper_invoker));
     host_sensors_ = new HostSensors(*runtime_);
+    host_audio_ = new HostAudio(*runtime_);
     {
         HostJni* jni_for_activity = host_jni_;
         LibraryRuntime* runtime = runtime_;
@@ -450,15 +451,16 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
     HostEgl* host_egl = host_egl_;
     HostLooper* host_looper = host_looper_;
     HostSensors* host_sensors = host_sensors_;
+    HostAudio* host_audio = host_audio_;
     HostInput* host_input = host_input_;
     HostConfiguration* host_configuration = host_configuration_;
     HostPlatformCompat* host_compat = host_compat_;
     // Core ranges never overlap (GLES 0-141, assets 142-159, windows 160-167, EGL 168-211,
-    // append-only platform compatibility 212-227, sensors 344-375, JNI 0xFB00+), so the chain
-    // order is free;
+    // append-only platform compatibility 212-227, sensors 344-375, audio 0xFA00+, JNI 0xFB00+), so
+    // the chain order is free;
     // GL stays first because it is by far the hotter path during rendering.
     runtime_->set_host_call_handler([host_jni, host_gl, host_assets, host_windows, host_egl,
-                                     host_looper, host_sensors, host_input, host_configuration,
+                                     host_looper, host_sensors, host_audio, host_input, host_configuration,
                                      host_compat](std::uint32_t index, GuestThread& thread) {
         if (host_gl != nullptr && host_gl->handle_host_call(index, thread)) return true;
         if (host_assets != nullptr && host_assets->handle_host_call(index, thread)) return true;
@@ -466,6 +468,7 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
         if (host_egl != nullptr && host_egl->handle_host_call(index, thread)) return true;
         if (host_looper->handle_host_call(index, thread)) return true;
         if (host_sensors->handle_host_call(index, thread)) return true;
+        if (host_audio->handle_host_call(index, thread)) return true;
         if (host_input != nullptr && host_input->handle_host_call(index, thread)) return true;
         if (host_configuration != nullptr && host_configuration->handle_host_call(index, thread)) return true;
         if (host_compat->handle_host_call(index, thread)) return true;

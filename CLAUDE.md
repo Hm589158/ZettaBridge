@@ -318,7 +318,7 @@ functions. Accept: the game is playable start to finish.
   PI futex commands for every thread.
 - **Host-call indices `0xFE00-0xFEFF` are reserved for the library runtime**
   (`READY` = `0xFE00`, carrier `PARK` = `0xFE01`). Generated stub indices
-  (`tools/gen_stubs.py`) stay below `0xFB00`.
+  (`tools/gen_stubs.py`) stay below `0xFA00` (audio).
 - **Host-call indices `0xFB00-0xFCFF` belong to the JNI bridge** (`jni_protocol.h`): flat
   JNI calls at `0xFC00+`, host-stub slots at `0xFB00 + slot`.
 - **Never delete the argument references of a JNI native call.** ART logs "failed to find
@@ -333,11 +333,20 @@ functions. Accept: the game is playable start to finish.
   visibility diagnostics skip GLES 1 contexts (their GLES 2 queries would leave GL errors for the
   guest). `gen_gles.py` reads the NDK headers like `gen_stubs.py`.
 - **`libOpenSLES.so` is guest code, not trap stubs** (`guest/opensles/zbopensles.c`). OpenSL ES
-  is reached through interface vtables, so `gen_stubs.py` cannot serve it. It is silent for
-  now: buffer queue players consume buffers in real time and call their callback, URI/fd
-  players keep state and position, decoding to a buffer queue is refused. `build_guest.sh`
-  fails if it lacks any export (or symbol version) of the NDK stub
-  (`tools/check_opensles_exports.py`); `opensles_dynamic` covers the behavior.
+  is reached through interface vtables, so `gen_stubs.py` cannot serve it. The object model is
+  guest-side; the host only plays (`audio_protocol.h`, `HostAudio`,
+  `core/android/audio_driver_backend.cpp`): a PCM buffer queue player has its own guest output
+  thread that writes each buffer to a host AAudio stream (the blocking write is its clock), and a
+  URI/fd player is a player of the host's own OpenSL ES, polled by the worker for prefetch,
+  errors and HEADATEND. Without host audio (zbrun, unplayable formats) players stay silent and
+  are paced by the clock. Decoding to a buffer queue is refused. `build_guest.sh` fails if the
+  library lacks any export (or symbol version) of the NDK stub
+  (`tools/check_opensles_exports.py`); `opensles_dynamic` and `audio_test` cover the behavior.
+- **Host-call indices `0xFA00-0xFAFF` belong to audio** (`audio_protocol.h`); generated stub
+  indices stay below `0xFA00`.
+- **Translated guests get a 60 Hz display mode** (`GuestWindowStyle.limitRefreshRate`). Old
+  games step their world once per frame; on the 120 Hz OnePlus 13 panel Pocket Army ran at double
+  speed.
 - **JNI tables and host-call lists are generated.** `tools/gen_jni.py` writes
   `core/include/zb/jni_hostcalls.h`, `core/src/gen/jni_hostcalls.inc` and `guest/zbjni/gen/*`;
   never edit them by hand. `gen_jni_check` (ctest) fails when they are stale.

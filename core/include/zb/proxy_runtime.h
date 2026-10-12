@@ -20,6 +20,7 @@
 #include "zb/host_native_activity.h"
 #include "zb/native_activity_platform.h"
 #include "zb/host_input.h"
+#include "zb/host_audio.h"
 #include "zb/host_sensors.h"
 #include "zb/host_native_window.h"
 #include "zb/host_platform_compat.h"
@@ -210,6 +211,8 @@ public:
     HostNativeWindow* host_native_window() { return host_windows_; }
     HostLooper* host_looper() { return host_looper_; }
     HostSensors* host_sensors() { return host_sensors_; }
+    // Always present; it serves audio only once a backend is installed (Android).
+    HostAudio* host_audio() { return host_audio_; }
     HostInput* host_input() { return host_input_; }
     HostConfiguration* host_configuration() { return host_configuration_; }
     HostNativeActivity* host_native_activity() { return host_native_activity_; }
@@ -237,6 +240,7 @@ private:
     HostNativeWindow* host_windows_ = nullptr;
     HostLooper* host_looper_ = nullptr;
     HostSensors* host_sensors_ = nullptr;
+    HostAudio* host_audio_ = nullptr;
     HostInput* host_input_ = nullptr;
     HostConfiguration* host_configuration_ = nullptr;
     HostNativeActivity* host_native_activity_ = nullptr;

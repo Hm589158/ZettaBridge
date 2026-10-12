@@ -38,6 +38,7 @@ GuestJniRuntime::GuestJniRuntime(JavaVM* vm)
       native_activity_glue_(*engine_.host_native_activity(), engine_.host_native_window(), engine_.host_input()),
       proxies_(engine_) {
     engine_.set_native_activity_platform(&native_activity_glue_);
+    engine_.host_audio()->set_backend(&audio_backend_);
 }
 
 bool GuestJniRuntime::Engine::bind_class_loader(JniBackend::Env env, JniBackend::Ref loader, std::string& error) {
