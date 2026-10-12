@@ -87,7 +87,7 @@ jobs:
             -DZB_BUILD_TESTS=OFF \
             -DBoost_INCLUDE_DIR="$GITHUB_WORKSPACE/build/boost-headers"
 
-          ninja -C build/android-arm64 zbridge
+          ninja -C build/android-arm64 zbridge zbproxy
 
           test -f build/android-arm64/core/libzbridge.so
           test -f build/android-arm64/core/libzbproxy.so
