@@ -17,6 +17,7 @@ RUNTIME = {
     "assets/zb/guest/lib/libzbjni.so", "assets/zb/guest/lib/libGLESv2.so",
     "assets/zb/guest/lib/libGLESv1_CM.so", "assets/zb/guest/lib/libEGL.so",
     "assets/zb/guest/lib/libandroid.so", "assets/zb/guest/lib/libjnigraphics.so",
+    "assets/zb/guest/lib/libOpenSLES.so",
     "assets/zb/host/libzbproxy.so", "assets/zb-files.txt", "assets/zb-version.txt",
     "jniLibs/arm64-v8a/libzbridge.so",
 }
@@ -51,6 +52,7 @@ def main() -> None:
         "assets/zb/guest/lib/libEGL.so",
         "assets/zb/guest/lib/libandroid.so",
         "assets/zb/guest/lib/libjnigraphics.so",
+        "assets/zb/guest/lib/libOpenSLES.so",
     ]:
         elf(root / relative, 1, 40)
     elf(root / "assets/zb/host/libzbproxy.so", 2, 183)
