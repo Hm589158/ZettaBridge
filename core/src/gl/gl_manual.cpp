@@ -1,6 +1,7 @@
 #include "zb/host_gl.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -52,7 +53,24 @@ struct GlThreadState {
         bool integer = false;
     };
 
+    // GLES 1.1 fixed-function client arrays (glVertexPointer and friends). Recorded like a
+    // client vertex attribute and handed to the driver at draw time.
+    struct ClientArray {
+        bool defined = false;
+        bool enabled = false;
+        GLint size = 4;
+        GLenum type = 0x1406;
+        GLsizei stride = 0;
+        std::uint32_t guest_pointer = 0;
+        GLuint buffer = 0;
+    };
+    // Slots of client_arrays: one per array, texture coordinates once per texture unit.
+    enum : unsigned { kVertexArray, kNormalArray, kColorArray, kPointSizeArray, kTexCoordArray0 };
+    static constexpr unsigned kTextureUnits = 8;
+
     const HostGl* owner = nullptr;
+    std::array<ClientArray, kTexCoordArray0 + kTextureUnits> client_arrays{};
+    unsigned client_active_texture = 0;
     GLint pack_alignment = 4;
     GLint unpack_alignment = 4;
     GLuint array_buffer = 0;
@@ -179,6 +197,75 @@ bool checked_multiply(std::uint64_t a, std::uint64_t b, std::uint64_t& result) {
     return true;
 }
 
+// GLES 1.1 client array names and the texture unit base.
+constexpr GLenum kGlVertexArray = 0x8074;
+constexpr GLenum kGlNormalArray = 0x8075;
+constexpr GLenum kGlColorArray = 0x8076;
+constexpr GLenum kGlTextureCoordArray = 0x8078;
+constexpr GLenum kGlPointSizeArrayOes = 0x8B9C;
+constexpr GLenum kGlTexture0 = 0x84C0;
+
+// The client_arrays slot an array name enables, or nullopt for a name GLES 1.1 does not have.
+std::optional<unsigned> client_array_slot(const GlThreadState& current, GLenum array) {
+    switch (array) {
+    case kGlVertexArray: return GlThreadState::kVertexArray;
+    case kGlNormalArray: return GlThreadState::kNormalArray;
+    case kGlColorArray: return GlThreadState::kColorArray;
+    case kGlPointSizeArrayOes: return GlThreadState::kPointSizeArray;
+    case kGlTextureCoordArray: return GlThreadState::kTexCoordArray0 + current.client_active_texture;
+    default: return std::nullopt;
+    }
+}
+
+// Hands one fixed-function array to the driver: a buffer offset while a buffer is bound, a host
+// pointer into guest memory at draw time otherwise. Texture coordinates go to their own unit.
+void issue_client_array(HostGl& host, unsigned slot, const GlThreadState::ClientArray& array,
+                        const void* pointer) {
+    GlBackend& gl = host.backend();
+    switch (slot) {
+    case GlThreadState::kVertexArray:
+        gl.glVertexPointer(array.size, array.type, array.stride, pointer);
+        return;
+    case GlThreadState::kNormalArray:
+        gl.glNormalPointer(array.type, array.stride, pointer);
+        return;
+    case GlThreadState::kColorArray:
+        gl.glColorPointer(array.size, array.type, array.stride, pointer);
+        return;
+    case GlThreadState::kPointSizeArray:
+        gl.glPointSizePointerOES(array.type, array.stride, pointer);
+        return;
+    default: {
+        const unsigned unit = slot - GlThreadState::kTexCoordArray0;
+        const unsigned active = state(host).client_active_texture;
+        if (unit != active) gl.glClientActiveTexture(kGlTexture0 + unit);
+        gl.glTexCoordPointer(array.size, array.type, array.stride, pointer);
+        if (unit != active) gl.glClientActiveTexture(kGlTexture0 + active);
+        return;
+    }
+    }
+}
+
+// glVertexPointer and friends: size, type and stride are scalars, the pointer is the argument at
+// pointer_position.
+bool record_client_array(HostGl& host, HostGl::Call& call, unsigned slot, GLint size, GLenum type,
+                         GLsizei stride, unsigned pointer_position) {
+    GlThreadState& current = state(host);
+    GlThreadState::ClientArray& array = current.client_arrays[slot];
+    array.defined = true;
+    array.size = size;
+    array.type = type;
+    array.stride = stride;
+    array.guest_pointer = call.arg(pointer_position);
+    array.buffer = current.array_buffer;
+    if (!call.valid()) return true;
+    if (array.buffer != 0) {
+        issue_client_array(host, slot, array,
+                           reinterpret_cast<const void*>(static_cast<std::uintptr_t>(array.guest_pointer)));
+    }
+    return true;
+}
+
 template <typename T>
 bool serve_pname(HostGl& host, HostGl::Call& call, void (GlBackend::*function)(GLenum, T*)) {
     const GLenum pname = call.scalar<GLenum>(0);
@@ -288,6 +375,39 @@ std::uint64_t element_index_bytes(GLenum type) {
     }
 }
 
+// The host pointer for a client array that a draw reads from element first to element last, or
+// nullptr after failing the call when that range is not readable guest memory.
+const void* client_range(HostGl& host, HostGl::Call& call, std::uint32_t guest_pointer, GLint size,
+                         GLenum type, GLsizei stride, std::uint64_t first, std::uint64_t last,
+                         const char* layout_error, const char* overflow_error,
+                         const char* range_error) {
+    const std::uint64_t component = attribute_component_bytes(type);
+    if (size < 1 || size > 4 || component == 0 || stride < 0) {
+        call.fail(kGlInvalidOperation, layout_error);
+        return nullptr;
+    }
+    const std::uint64_t element = static_cast<std::uint64_t>(size) * component;
+    const std::uint64_t step = stride == 0 ? element : static_cast<std::uint64_t>(stride);
+    std::uint64_t first_offset = 0;
+    std::uint64_t last_offset = 0;
+    if (!checked_multiply(first, step, first_offset) || !checked_multiply(last, step, last_offset) ||
+        last_offset > std::numeric_limits<std::uint64_t>::max() - element) {
+        call.fail(kGlInvalidOperation, overflow_error);
+        return nullptr;
+    }
+    const std::uint64_t range_start = static_cast<std::uint64_t>(guest_pointer) + first_offset;
+    const std::uint64_t range_end = static_cast<std::uint64_t>(guest_pointer) + last_offset + element;
+    if (range_start >= kGuestSpaceSize || range_end > kGuestSpaceSize || range_end < range_start ||
+        host.runtime().memory().host_ptr(static_cast<std::uint32_t>(range_start),
+                                         range_end - range_start, kPageRead) == nullptr) {
+        call.fail(kGlInvalidOperation, range_error);
+        return nullptr;
+    }
+    return host.runtime().memory().base() + guest_pointer;
+}
+
+// Hands every enabled client array (GLES 2.0 attributes and GLES 1.1 fixed-function arrays) to
+// the driver once the element range the draw reads is known to be readable guest memory.
 bool materialize_client_arrays(HostGl& host, HostGl::Call& call, std::uint64_t first,
                                std::uint64_t last) {
     struct MaterializedAttribute {
@@ -295,44 +415,39 @@ bool materialize_client_arrays(HostGl& host, HostGl::Call& call, std::uint64_t f
         const GlThreadState::Attribute* attribute;
         const void* pointer;
     };
+    struct MaterializedArray {
+        unsigned slot;
+        const GlThreadState::ClientArray* array;
+        const void* pointer;
+    };
 
     GlThreadState& current = state(host);
     std::vector<MaterializedAttribute> materialized;
     for (const auto& [index, attribute] : current.attributes) {
         if (!attribute.enabled || !attribute.defined || attribute.buffer != 0) continue;
-        const std::uint64_t component = attribute_component_bytes(attribute.type);
-        if (attribute.size < 1 || attribute.size > 4 || component == 0 || attribute.stride < 0) {
-            call.fail(kGlInvalidOperation, "client vertex attribute layout is invalid");
-            return false;
-        }
-        const std::uint64_t element = static_cast<std::uint64_t>(attribute.size) * component;
-        const std::uint64_t stride = attribute.stride == 0
-                                         ? element
-                                         : static_cast<std::uint64_t>(attribute.stride);
-        std::uint64_t first_offset = 0;
-        std::uint64_t last_offset = 0;
-        if (!checked_multiply(first, stride, first_offset) ||
-            !checked_multiply(last, stride, last_offset) ||
-            last_offset > std::numeric_limits<std::uint64_t>::max() - element) {
-            call.fail(kGlInvalidOperation, "client vertex attribute range overflowed");
-            return false;
-        }
-        const std::uint64_t range_start =
-            static_cast<std::uint64_t>(attribute.guest_pointer) + first_offset;
-        const std::uint64_t range_end =
-            static_cast<std::uint64_t>(attribute.guest_pointer) + last_offset + element;
-        if (range_start >= kGuestSpaceSize || range_end > kGuestSpaceSize ||
-            range_end < range_start ||
-            host.runtime().memory().host_ptr(static_cast<std::uint32_t>(range_start),
-                                             range_end - range_start, kPageRead) == nullptr) {
-            call.fail(kGlInvalidOperation, "client vertex attribute range is unreadable");
-            return false;
-        }
-        const void* pointer = host.runtime().memory().base() + attribute.guest_pointer;
+        const void* pointer = client_range(host, call, attribute.guest_pointer, attribute.size, attribute.type,
+                                           attribute.stride, first, last,
+                                           "client vertex attribute layout is invalid",
+                                           "client vertex attribute range overflowed",
+                                           "client vertex attribute range is unreadable");
+        if (pointer == nullptr) return false;
         materialized.push_back({index, &attribute, pointer});
     }
+    std::vector<MaterializedArray> arrays;
+    for (unsigned slot = 0; slot < current.client_arrays.size(); ++slot) {
+        const GlThreadState::ClientArray& array = current.client_arrays[slot];
+        if (!array.enabled || !array.defined || array.buffer != 0) continue;
+        const GLint size = slot == GlThreadState::kNormalArray      ? 3
+                           : slot == GlThreadState::kPointSizeArray ? 1
+                                                                    : array.size;
+        const void* pointer = client_range(host, call, array.guest_pointer, size, array.type, array.stride,
+                                           first, last, "client array layout is invalid",
+                                           "client array range overflowed", "client array range is unreadable");
+        if (pointer == nullptr) return false;
+        arrays.push_back({slot, &array, pointer});
+    }
 
-    const bool rebound = !materialized.empty() && current.array_buffer != 0;
+    const bool rebound = (!materialized.empty() || !arrays.empty()) && current.array_buffer != 0;
     if (rebound) host.backend().glBindBuffer(kGlArrayBuffer, 0);
     for (const auto& item : materialized) {
         if (item.attribute->integer) {
@@ -345,6 +460,7 @@ bool materialize_client_arrays(HostGl& host, HostGl::Call& call, std::uint64_t f
                 item.attribute->normalized, item.attribute->stride, item.pointer);
         }
     }
+    for (const auto& item : arrays) issue_client_array(host, item.slot, *item.array, item.pointer);
     if (rebound) host.backend().glBindBuffer(kGlArrayBuffer, current.array_buffer);
     return true;
 }
@@ -357,7 +473,24 @@ std::uint64_t gl_pname_count(GlBackend& backend, GLenum pname) {
     case 0x846E:  // GL_ALIASED_LINE_WIDTH_RANGE
     case 0x0B70:  // GL_DEPTH_RANGE
     case 0x0D3A:  // GL_MAX_VIEWPORT_DIMS
+    case 0x0B12:  // GL_SMOOTH_POINT_SIZE_RANGE (GLES 1.1)
+    case 0x0B22:  // GL_SMOOTH_LINE_WIDTH_RANGE (GLES 1.1)
         return 2;
+    case 0x0B02:  // GL_CURRENT_NORMAL (GLES 1.1)
+    case 0x8129:  // GL_POINT_DISTANCE_ATTENUATION (GLES 1.1)
+        return 3;
+    case 0x0B00:  // GL_CURRENT_COLOR (GLES 1.1)
+    case 0x0B03:  // GL_CURRENT_TEXTURE_COORDS (GLES 1.1)
+    case 0x0B66:  // GL_FOG_COLOR (GLES 1.1)
+    case 0x0B53:  // GL_LIGHT_MODEL_AMBIENT (GLES 1.1)
+        return 4;
+    case 0x0BA6:  // GL_MODELVIEW_MATRIX (GLES 1.1)
+    case 0x0BA7:  // GL_PROJECTION_MATRIX (GLES 1.1)
+    case 0x0BA8:  // GL_TEXTURE_MATRIX (GLES 1.1)
+    case 0x898D:  // GL_MODELVIEW_MATRIX_FLOAT_AS_INT_BITS_OES
+    case 0x898E:  // GL_PROJECTION_MATRIX_FLOAT_AS_INT_BITS_OES
+    case 0x898F:  // GL_TEXTURE_MATRIX_FLOAT_AS_INT_BITS_OES
+        return 16;
     case 0x8005:  // GL_BLEND_COLOR
     case 0x0C22:  // GL_COLOR_CLEAR_VALUE
     case 0x0C23:  // GL_COLOR_WRITEMASK
@@ -382,6 +515,27 @@ std::uint64_t gl_pname_count(GlBackend& backend, GLenum pname) {
         }
         return 1;
     }
+    }
+}
+
+std::uint64_t gl_es1_param_count(GLenum pname) {
+    switch (pname) {
+    case 0x0B66:  // GL_FOG_COLOR
+    case 0x0B53:  // GL_LIGHT_MODEL_AMBIENT
+    case 0x2201:  // GL_TEXTURE_ENV_COLOR
+    case 0x1200:  // GL_AMBIENT
+    case 0x1201:  // GL_DIFFUSE
+    case 0x1202:  // GL_SPECULAR
+    case 0x1203:  // GL_POSITION
+    case 0x1600:  // GL_EMISSION
+    case 0x1602:  // GL_AMBIENT_AND_DIFFUSE
+    case 0x8B9D:  // GL_TEXTURE_CROP_RECT_OES
+        return 4;
+    case 0x1204:  // GL_SPOT_DIRECTION
+    case 0x8129:  // GL_POINT_DISTANCE_ATTENUATION
+        return 3;
+    default:
+        return 1;
     }
 }
 
@@ -506,6 +660,19 @@ void HostGl::note_vertex_attrib_enabled(GLuint index, bool enabled) {
     state(*this).attributes[index].enabled = enabled;
 }
 
+void HostGl::note_client_state(GLenum array, bool enabled) {
+    GlThreadState& current = state(*this);
+    if (const auto slot = client_array_slot(current, array)) current.client_arrays[*slot].enabled = enabled;
+}
+
+void HostGl::note_client_active_texture(GLenum texture) {
+    GlThreadState& current = state(*this);
+    // The driver rejects a unit beyond its own limit; past ours the selection is just not tracked.
+    if (texture >= kGlTexture0 && texture - kGlTexture0 < GlThreadState::kTextureUnits) {
+        current.client_active_texture = texture - kGlTexture0;
+    }
+}
+
 GLint HostGl::pixel_alignment(bool pack) const {
     const GlThreadState& current = state(*this);
     return pack ? current.pack_alignment : current.unpack_alignment;
@@ -571,6 +738,61 @@ bool zbgl_manual_glGetBooleanv(HostGl& host, HostGl::Call& call) {
 
 bool zbgl_manual_glGetFloatv(HostGl& host, HostGl::Call& call) {
     return serve_pname(host, call, &GlBackend::glGetFloatv);
+}
+
+bool zbgl_manual_glGetFixedv(HostGl& host, HostGl::Call& call) {
+    return serve_pname(host, call, &GlBackend::glGetFixedv);
+}
+
+bool zbgl_manual_glVertexPointer(HostGl& host, HostGl::Call& call) {
+    return record_client_array(host, call, GlThreadState::kVertexArray, call.scalar<GLint>(0),
+                               call.scalar<GLenum>(1), call.scalar<GLsizei>(2), 3);
+}
+
+bool zbgl_manual_glColorPointer(HostGl& host, HostGl::Call& call) {
+    return record_client_array(host, call, GlThreadState::kColorArray, call.scalar<GLint>(0),
+                               call.scalar<GLenum>(1), call.scalar<GLsizei>(2), 3);
+}
+
+bool zbgl_manual_glTexCoordPointer(HostGl& host, HostGl::Call& call) {
+    const unsigned slot = GlThreadState::kTexCoordArray0 + state(host).client_active_texture;
+    return record_client_array(host, call, slot, call.scalar<GLint>(0), call.scalar<GLenum>(1),
+                               call.scalar<GLsizei>(2), 3);
+}
+
+bool zbgl_manual_glNormalPointer(HostGl& host, HostGl::Call& call) {
+    return record_client_array(host, call, GlThreadState::kNormalArray, 3, call.scalar<GLenum>(0),
+                               call.scalar<GLsizei>(1), 2);
+}
+
+bool zbgl_manual_glPointSizePointerOES(HostGl& host, HostGl::Call& call) {
+    return record_client_array(host, call, GlThreadState::kPointSizeArray, 1, call.scalar<GLenum>(0),
+                               call.scalar<GLsizei>(1), 2);
+}
+
+bool zbgl_manual_glGetPointerv(HostGl& host, HostGl::Call& call) {
+    const GLenum pname = call.scalar<GLenum>(0);
+    std::uint32_t* pointer = call.pointer<std::uint32_t>(1, 1, kPageRead | kPageWrite);
+    if (!call.valid()) return true;
+    if (pointer == nullptr) {
+        call.fail(kGlInvalidValue, "pointer output is null");
+        return true;
+    }
+    GlThreadState& current = state(host);
+    GLenum array = 0;
+    switch (pname) {
+    case 0x808E: array = kGlVertexArray; break;        // GL_VERTEX_ARRAY_POINTER
+    case 0x808F: array = kGlNormalArray; break;        // GL_NORMAL_ARRAY_POINTER
+    case 0x8090: array = kGlColorArray; break;         // GL_COLOR_ARRAY_POINTER
+    case 0x8092: array = kGlTextureCoordArray; break;  // GL_TEXTURE_COORD_ARRAY_POINTER
+    case 0x898C: array = kGlPointSizeArrayOes; break;  // GL_POINT_SIZE_ARRAY_POINTER_OES
+    default:
+        call.fail(0x0500, "glGetPointerv pname is not a client array pointer");  // GL_INVALID_ENUM
+        return true;
+    }
+    // The guest gets back the address it passed, never the host pointer the driver holds.
+    *pointer = current.client_arrays[*client_array_slot(current, array)].guest_pointer;
+    return true;
 }
 
 bool zbgl_manual_glGetIntegerv(HostGl& host, HostGl::Call& call) {

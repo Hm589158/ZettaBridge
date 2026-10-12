@@ -14,7 +14,7 @@
 
 namespace zb {
 
-// GLES 2.0 + 3.0 host-call dispatcher. Guest code passes AAPCS32 words in r0-r3 and on its stack;
+// GLES 1.1 + 2.0 + 3.0 host-call dispatcher. Guest code passes AAPCS32 words in r0-r3 and on its stack;
 // HostGl translates those words to the portable GlBackend seam after Dynarmic has stopped.
 // GL visibility diagnostics in the runtime report (gl_diagnostics.cpp). Off by default: they
 // add driver queries to the call stream. The Android runtime turns them on.
@@ -127,6 +127,10 @@ public:
     // while one is bound, a pixel "pointer" argument is a buffer offset, not a guest address.
     GLuint pixel_buffer(bool pack) const;
     void note_vertex_attrib_enabled(GLuint index, bool enabled);
+    // GLES 1.1 glEnableClientState / glDisableClientState and glClientActiveTexture: which
+    // fixed-function client arrays a draw has to materialize.
+    void note_client_state(GLenum array, bool enabled);
+    void note_client_active_texture(GLenum texture);
     void invalidate_uniforms(GLuint program);
     GLint pixel_alignment(bool pack) const;
     std::optional<std::uint64_t> uniform_elements(GLuint program, GLint location);
@@ -150,6 +154,9 @@ private:
 };
 
 std::uint64_t gl_pname_count(GlBackend& backend, GLenum pname);
+// Element count of a GLES 1.1 fog, light, light model, material, texture environment, point or
+// texture parameter array (the COMPSIZE(pname) of glLightfv and friends).
+std::uint64_t gl_es1_param_count(GLenum pname);
 std::optional<std::uint64_t> gl_pixel_bytes(GLenum format, GLenum type, GLsizei width,
                                             GLsizei height, GLint alignment);
 

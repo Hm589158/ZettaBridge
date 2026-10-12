@@ -62,7 +62,7 @@ if (ANDROID)
     # libGLESv2.so; the NDK splits the stub libraries by version.
     # core/src for the generated dispatch and driver .inc files the Android backends include.
     target_include_directories(zbridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(zbridge PRIVATE zbcore GLESv2 GLESv3 EGL android)
+    target_link_libraries(zbridge PRIVATE zbcore GLESv2 GLESv3 EGL android dl)
     set_target_properties(zbridge PROPERTIES CXX_VISIBILITY_PRESET hidden)
     target_compile_definitions(zbridge PRIVATE ZB_EXPORT_C_API)
     # --exclude-libs keeps the statically linked libc++ and friends from being exported, so

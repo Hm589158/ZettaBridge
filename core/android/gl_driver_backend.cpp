@@ -2,6 +2,7 @@
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <dlfcn.h>
 
 #include <string>
 #include <type_traits>
@@ -60,6 +61,23 @@ void* GlDriverBackend::extension_entry(unsigned slot, const char* name) {
     return cached == kExtensionMissing ? nullptr : cached;
 }
 
+void* GlDriverBackend::es1_entry(unsigned slot, const char* name) {
+    void* cached = es1_entries_[slot].load(std::memory_order_acquire);
+    if (cached == nullptr) {
+        // libGLESv1_CM.so is a public NDK library, so the app namespace may open it.
+        static void* const library = ::dlopen("libGLESv1_CM.so", RTLD_NOW | RTLD_LOCAL);
+        cached = library != nullptr ? ::dlsym(library, name) : nullptr;
+        if (cached == nullptr) cached = reinterpret_cast<void*>(::eglGetProcAddress(name));
+        if (cached == nullptr) {
+            runtime_report().note_gl_detail(std::string("missing-") + name, "no GLES 1 entry",
+                                            false);
+            cached = kExtensionMissing;
+        }
+        es1_entries_[slot].store(cached, std::memory_order_release);
+    }
+    return cached == kExtensionMissing ? nullptr : cached;
+}
+
 // One definition per ZB_GL_EXT_ENTRY row: a missing entry point queues GL_INVALID_OPERATION and
 // returns a zeroed value, exactly as a driver without the extension would.
 #define ZB_GL_EXT_ENTRY(slot, name, result, declaration, types, arguments)          \
@@ -74,6 +92,20 @@ void* GlDriverBackend::extension_entry(unsigned slot, const char* name) {
     }
 #include "zb/gl_ext_entries.inc"
 #undef ZB_GL_EXT_ENTRY
+
+// The GLES 1.1 rows, the same way through es1_entry().
+#define ZB_GL_ES1_ENTRY(slot, name, result, declaration, types, arguments)          \
+    result GlDriverBackend::name declaration {                                      \
+        using Entry = result(GL_APIENTRY*) types;                                   \
+        void* entry = es1_entry(slot, #name);                                       \
+        if (entry == nullptr) {                                                     \
+            set_error(GL_INVALID_OPERATION);                                        \
+            return extension_default<result>();                                     \
+        }                                                                           \
+        return reinterpret_cast<Entry>(entry) arguments;                            \
+    }
+#include "zb/gl_es1_entries.inc"
+#undef ZB_GL_ES1_ENTRY
 
 std::uint64_t GlDriverBackend::invoke(const char*, std::initializer_list<std::uint64_t>) {
     // Every typed virtual is overridden above; the portable invoke() seam (used by MockGles in

@@ -1820,6 +1820,634 @@ bool HostGl::dispatch(Call& call) {
         backend_.glTexStorage3DEXT(target, levels, internalformat, width, height, depth);
         return true;
     }
+    case ZB_GL_HC_glAlphaFunc: {
+        const GLenum func = call.scalar<GLenum>(0);
+        const GLfloat ref = call.scalar<GLfloat>(1);
+        if (!call.valid()) return true;
+        backend_.glAlphaFunc(func, ref);
+        return true;
+    }
+    case ZB_GL_HC_glAlphaFuncx: {
+        const GLenum func = call.scalar<GLenum>(0);
+        const GLfixed ref = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glAlphaFuncx(func, ref);
+        return true;
+    }
+    case ZB_GL_HC_glClearColorx: {
+        const GLfixed red = call.scalar<GLfixed>(0);
+        const GLfixed green = call.scalar<GLfixed>(1);
+        const GLfixed blue = call.scalar<GLfixed>(2);
+        const GLfixed alpha = call.scalar<GLfixed>(3);
+        if (!call.valid()) return true;
+        backend_.glClearColorx(red, green, blue, alpha);
+        return true;
+    }
+    case ZB_GL_HC_glClearDepthx: {
+        const GLfixed depth = call.scalar<GLfixed>(0);
+        if (!call.valid()) return true;
+        backend_.glClearDepthx(depth);
+        return true;
+    }
+    case ZB_GL_HC_glClientActiveTexture: {
+        const GLenum texture = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glClientActiveTexture(texture);
+        note_client_active_texture(texture);
+        return true;
+    }
+    case ZB_GL_HC_glClipPlanef: {
+        const GLenum p = call.scalar<GLenum>(0);
+        const GLfloat * eqn = call.pointer<const GLfloat>(1, 4u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glClipPlanef(p, eqn);
+        return true;
+    }
+    case ZB_GL_HC_glClipPlanex: {
+        const GLenum plane = call.scalar<GLenum>(0);
+        const GLfixed * equation = call.pointer<const GLfixed>(1, 4u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glClipPlanex(plane, equation);
+        return true;
+    }
+    case ZB_GL_HC_glColor4f: {
+        const GLfloat red = call.scalar<GLfloat>(0);
+        const GLfloat green = call.scalar<GLfloat>(1);
+        const GLfloat blue = call.scalar<GLfloat>(2);
+        const GLfloat alpha = call.scalar<GLfloat>(3);
+        if (!call.valid()) return true;
+        backend_.glColor4f(red, green, blue, alpha);
+        return true;
+    }
+    case ZB_GL_HC_glColor4ub: {
+        const GLubyte red = call.scalar<GLubyte>(0);
+        const GLubyte green = call.scalar<GLubyte>(1);
+        const GLubyte blue = call.scalar<GLubyte>(2);
+        const GLubyte alpha = call.scalar<GLubyte>(3);
+        if (!call.valid()) return true;
+        backend_.glColor4ub(red, green, blue, alpha);
+        return true;
+    }
+    case ZB_GL_HC_glColor4x: {
+        const GLfixed red = call.scalar<GLfixed>(0);
+        const GLfixed green = call.scalar<GLfixed>(1);
+        const GLfixed blue = call.scalar<GLfixed>(2);
+        const GLfixed alpha = call.scalar<GLfixed>(3);
+        if (!call.valid()) return true;
+        backend_.glColor4x(red, green, blue, alpha);
+        return true;
+    }
+    case ZB_GL_HC_glColorPointer: {
+        return zbgl_manual_glColorPointer(*this, call);
+    }
+    case ZB_GL_HC_glDepthRangex: {
+        const GLfixed n = call.scalar<GLfixed>(0);
+        const GLfixed f = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glDepthRangex(n, f);
+        return true;
+    }
+    case ZB_GL_HC_glDisableClientState: {
+        const GLenum array = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glDisableClientState(array);
+        note_client_state(array, false);
+        return true;
+    }
+    case ZB_GL_HC_glEnableClientState: {
+        const GLenum array = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glEnableClientState(array);
+        note_client_state(array, true);
+        return true;
+    }
+    case ZB_GL_HC_glFogf: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat param = call.scalar<GLfloat>(1);
+        if (!call.valid()) return true;
+        backend_.glFogf(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glFogfv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat * params = call.pointer<const GLfloat>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glFogfv(pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glFogx: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed param = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glFogx(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glFogxv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed * param = call.pointer<const GLfixed>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glFogxv(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glFrustumf: {
+        const GLfloat l = call.scalar<GLfloat>(0);
+        const GLfloat r = call.scalar<GLfloat>(1);
+        const GLfloat b = call.scalar<GLfloat>(2);
+        const GLfloat t = call.scalar<GLfloat>(3);
+        const GLfloat n = call.scalar<GLfloat>(4);
+        const GLfloat f = call.scalar<GLfloat>(5);
+        if (!call.valid()) return true;
+        backend_.glFrustumf(l, r, b, t, n, f);
+        return true;
+    }
+    case ZB_GL_HC_glFrustumx: {
+        const GLfixed l = call.scalar<GLfixed>(0);
+        const GLfixed r = call.scalar<GLfixed>(1);
+        const GLfixed b = call.scalar<GLfixed>(2);
+        const GLfixed t = call.scalar<GLfixed>(3);
+        const GLfixed n = call.scalar<GLfixed>(4);
+        const GLfixed f = call.scalar<GLfixed>(5);
+        if (!call.valid()) return true;
+        backend_.glFrustumx(l, r, b, t, n, f);
+        return true;
+    }
+    case ZB_GL_HC_glGetClipPlanef: {
+        const GLenum plane = call.scalar<GLenum>(0);
+        GLfloat * equation = call.pointer<GLfloat>(1, 4u, kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetClipPlanef(plane, equation);
+        return true;
+    }
+    case ZB_GL_HC_glGetClipPlanex: {
+        const GLenum plane = call.scalar<GLenum>(0);
+        GLfixed * equation = call.pointer<GLfixed>(1, 4u, kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetClipPlanex(plane, equation);
+        return true;
+    }
+    case ZB_GL_HC_glGetFixedv: {
+        return zbgl_manual_glGetFixedv(*this, call);
+    }
+    case ZB_GL_HC_glGetLightfv: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfloat * params = call.pointer<GLfloat>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetLightfv(light, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetLightxv: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfixed * params = call.pointer<GLfixed>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetLightxv(light, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetMaterialfv: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfloat * params = call.pointer<GLfloat>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetMaterialfv(face, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetMaterialxv: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfixed * params = call.pointer<GLfixed>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetMaterialxv(face, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetPointerv: {
+        return zbgl_manual_glGetPointerv(*this, call);
+    }
+    case ZB_GL_HC_glGetTexEnvfv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfloat * params = call.pointer<GLfloat>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetTexEnvfv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetTexEnviv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLint * params = call.pointer<GLint>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetTexEnviv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetTexEnvxv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfixed * params = call.pointer<GLfixed>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetTexEnvxv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glGetTexParameterxv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        GLfixed * params = call.pointer<GLfixed>(2, gl_es1_param_count(pname), kPageRead | kPageWrite);
+        if (!call.valid()) return true;
+        backend_.glGetTexParameterxv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glLightModelf: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat param = call.scalar<GLfloat>(1);
+        if (!call.valid()) return true;
+        backend_.glLightModelf(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glLightModelfv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat * params = call.pointer<const GLfloat>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLightModelfv(pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glLightModelx: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed param = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glLightModelx(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glLightModelxv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed * param = call.pointer<const GLfixed>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLightModelxv(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glLightf: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat param = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glLightf(light, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glLightfv: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat * params = call.pointer<const GLfloat>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLightfv(light, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glLightx: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed param = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glLightx(light, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glLightxv: {
+        const GLenum light = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed * params = call.pointer<const GLfixed>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLightxv(light, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glLineWidthx: {
+        const GLfixed width = call.scalar<GLfixed>(0);
+        if (!call.valid()) return true;
+        backend_.glLineWidthx(width);
+        return true;
+    }
+    case ZB_GL_HC_glLoadIdentity: {
+        if (!call.valid()) return true;
+        backend_.glLoadIdentity();
+        return true;
+    }
+    case ZB_GL_HC_glLoadMatrixf: {
+        const GLfloat * m = call.pointer<const GLfloat>(0, 16u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLoadMatrixf(m);
+        return true;
+    }
+    case ZB_GL_HC_glLoadMatrixx: {
+        const GLfixed * m = call.pointer<const GLfixed>(0, 16u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glLoadMatrixx(m);
+        return true;
+    }
+    case ZB_GL_HC_glLogicOp: {
+        const GLenum opcode = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glLogicOp(opcode);
+        return true;
+    }
+    case ZB_GL_HC_glMaterialf: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat param = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glMaterialf(face, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glMaterialfv: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat * params = call.pointer<const GLfloat>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glMaterialfv(face, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glMaterialx: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed param = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glMaterialx(face, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glMaterialxv: {
+        const GLenum face = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed * param = call.pointer<const GLfixed>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glMaterialxv(face, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glMatrixMode: {
+        const GLenum mode = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glMatrixMode(mode);
+        return true;
+    }
+    case ZB_GL_HC_glMultMatrixf: {
+        const GLfloat * m = call.pointer<const GLfloat>(0, 16u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glMultMatrixf(m);
+        return true;
+    }
+    case ZB_GL_HC_glMultMatrixx: {
+        const GLfixed * m = call.pointer<const GLfixed>(0, 16u, kPageRead);
+        if (!call.valid()) return true;
+        backend_.glMultMatrixx(m);
+        return true;
+    }
+    case ZB_GL_HC_glMultiTexCoord4f: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLfloat s = call.scalar<GLfloat>(1);
+        const GLfloat t = call.scalar<GLfloat>(2);
+        const GLfloat r = call.scalar<GLfloat>(3);
+        const GLfloat q = call.scalar<GLfloat>(4);
+        if (!call.valid()) return true;
+        backend_.glMultiTexCoord4f(target, s, t, r, q);
+        return true;
+    }
+    case ZB_GL_HC_glMultiTexCoord4x: {
+        const GLenum texture = call.scalar<GLenum>(0);
+        const GLfixed s = call.scalar<GLfixed>(1);
+        const GLfixed t = call.scalar<GLfixed>(2);
+        const GLfixed r = call.scalar<GLfixed>(3);
+        const GLfixed q = call.scalar<GLfixed>(4);
+        if (!call.valid()) return true;
+        backend_.glMultiTexCoord4x(texture, s, t, r, q);
+        return true;
+    }
+    case ZB_GL_HC_glNormal3f: {
+        const GLfloat nx = call.scalar<GLfloat>(0);
+        const GLfloat ny = call.scalar<GLfloat>(1);
+        const GLfloat nz = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glNormal3f(nx, ny, nz);
+        return true;
+    }
+    case ZB_GL_HC_glNormal3x: {
+        const GLfixed nx = call.scalar<GLfixed>(0);
+        const GLfixed ny = call.scalar<GLfixed>(1);
+        const GLfixed nz = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glNormal3x(nx, ny, nz);
+        return true;
+    }
+    case ZB_GL_HC_glNormalPointer: {
+        return zbgl_manual_glNormalPointer(*this, call);
+    }
+    case ZB_GL_HC_glOrthof: {
+        const GLfloat l = call.scalar<GLfloat>(0);
+        const GLfloat r = call.scalar<GLfloat>(1);
+        const GLfloat b = call.scalar<GLfloat>(2);
+        const GLfloat t = call.scalar<GLfloat>(3);
+        const GLfloat n = call.scalar<GLfloat>(4);
+        const GLfloat f = call.scalar<GLfloat>(5);
+        if (!call.valid()) return true;
+        backend_.glOrthof(l, r, b, t, n, f);
+        return true;
+    }
+    case ZB_GL_HC_glOrthox: {
+        const GLfixed l = call.scalar<GLfixed>(0);
+        const GLfixed r = call.scalar<GLfixed>(1);
+        const GLfixed b = call.scalar<GLfixed>(2);
+        const GLfixed t = call.scalar<GLfixed>(3);
+        const GLfixed n = call.scalar<GLfixed>(4);
+        const GLfixed f = call.scalar<GLfixed>(5);
+        if (!call.valid()) return true;
+        backend_.glOrthox(l, r, b, t, n, f);
+        return true;
+    }
+    case ZB_GL_HC_glPointParameterf: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat param = call.scalar<GLfloat>(1);
+        if (!call.valid()) return true;
+        backend_.glPointParameterf(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glPointParameterfv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfloat * params = call.pointer<const GLfloat>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glPointParameterfv(pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glPointParameterx: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed param = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glPointParameterx(pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glPointParameterxv: {
+        const GLenum pname = call.scalar<GLenum>(0);
+        const GLfixed * params = call.pointer<const GLfixed>(1, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glPointParameterxv(pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glPointSize: {
+        const GLfloat size = call.scalar<GLfloat>(0);
+        if (!call.valid()) return true;
+        backend_.glPointSize(size);
+        return true;
+    }
+    case ZB_GL_HC_glPointSizePointerOES: {
+        return zbgl_manual_glPointSizePointerOES(*this, call);
+    }
+    case ZB_GL_HC_glPointSizex: {
+        const GLfixed size = call.scalar<GLfixed>(0);
+        if (!call.valid()) return true;
+        backend_.glPointSizex(size);
+        return true;
+    }
+    case ZB_GL_HC_glPolygonOffsetx: {
+        const GLfixed factor = call.scalar<GLfixed>(0);
+        const GLfixed units = call.scalar<GLfixed>(1);
+        if (!call.valid()) return true;
+        backend_.glPolygonOffsetx(factor, units);
+        return true;
+    }
+    case ZB_GL_HC_glPopMatrix: {
+        if (!call.valid()) return true;
+        backend_.glPopMatrix();
+        return true;
+    }
+    case ZB_GL_HC_glPushMatrix: {
+        if (!call.valid()) return true;
+        backend_.glPushMatrix();
+        return true;
+    }
+    case ZB_GL_HC_glRotatef: {
+        const GLfloat angle = call.scalar<GLfloat>(0);
+        const GLfloat x = call.scalar<GLfloat>(1);
+        const GLfloat y = call.scalar<GLfloat>(2);
+        const GLfloat z = call.scalar<GLfloat>(3);
+        if (!call.valid()) return true;
+        backend_.glRotatef(angle, x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glRotatex: {
+        const GLfixed angle = call.scalar<GLfixed>(0);
+        const GLfixed x = call.scalar<GLfixed>(1);
+        const GLfixed y = call.scalar<GLfixed>(2);
+        const GLfixed z = call.scalar<GLfixed>(3);
+        if (!call.valid()) return true;
+        backend_.glRotatex(angle, x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glSampleCoveragex: {
+        const GLclampx value = call.scalar<GLclampx>(0);
+        const GLboolean invert = call.scalar<GLboolean>(1);
+        if (!call.valid()) return true;
+        backend_.glSampleCoveragex(value, invert);
+        return true;
+    }
+    case ZB_GL_HC_glScalef: {
+        const GLfloat x = call.scalar<GLfloat>(0);
+        const GLfloat y = call.scalar<GLfloat>(1);
+        const GLfloat z = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glScalef(x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glScalex: {
+        const GLfixed x = call.scalar<GLfixed>(0);
+        const GLfixed y = call.scalar<GLfixed>(1);
+        const GLfixed z = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glScalex(x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glShadeModel: {
+        const GLenum mode = call.scalar<GLenum>(0);
+        if (!call.valid()) return true;
+        backend_.glShadeModel(mode);
+        return true;
+    }
+    case ZB_GL_HC_glTexCoordPointer: {
+        return zbgl_manual_glTexCoordPointer(*this, call);
+    }
+    case ZB_GL_HC_glTexEnvf: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat param = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glTexEnvf(target, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glTexEnvfv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfloat * params = call.pointer<const GLfloat>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glTexEnvfv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glTexEnvi: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLint param = call.scalar<GLint>(2);
+        if (!call.valid()) return true;
+        backend_.glTexEnvi(target, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glTexEnviv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLint * params = call.pointer<const GLint>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glTexEnviv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glTexEnvx: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed param = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glTexEnvx(target, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glTexEnvxv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed * params = call.pointer<const GLfixed>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glTexEnvxv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glTexParameterx: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed param = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glTexParameterx(target, pname, param);
+        return true;
+    }
+    case ZB_GL_HC_glTexParameterxv: {
+        const GLenum target = call.scalar<GLenum>(0);
+        const GLenum pname = call.scalar<GLenum>(1);
+        const GLfixed * params = call.pointer<const GLfixed>(2, gl_es1_param_count(pname), kPageRead);
+        if (!call.valid()) return true;
+        backend_.glTexParameterxv(target, pname, params);
+        return true;
+    }
+    case ZB_GL_HC_glTranslatef: {
+        const GLfloat x = call.scalar<GLfloat>(0);
+        const GLfloat y = call.scalar<GLfloat>(1);
+        const GLfloat z = call.scalar<GLfloat>(2);
+        if (!call.valid()) return true;
+        backend_.glTranslatef(x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glTranslatex: {
+        const GLfixed x = call.scalar<GLfixed>(0);
+        const GLfixed y = call.scalar<GLfixed>(1);
+        const GLfixed z = call.scalar<GLfixed>(2);
+        if (!call.valid()) return true;
+        backend_.glTranslatex(x, y, z);
+        return true;
+    }
+    case ZB_GL_HC_glVertexPointer: {
+        return zbgl_manual_glVertexPointer(*this, call);
+    }
     default:
         return false;
     }

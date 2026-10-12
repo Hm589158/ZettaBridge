@@ -65,8 +65,9 @@ int main() {
     CHECK(zb::kGlHostCallCount == 142);
     CHECK(zb::kGlHostCall3Count == 104);
     CHECK(zb::kGlHostCallExtCount == 12);
-    CHECK(zb::kGlHostCallTotalCount == 258);
-    CHECK(zb::kGlPointerlessHostCallCount == 134);
+    CHECK(zb::kGlHostCall1Count == 87);
+    CHECK(zb::kGlHostCallTotalCount == 345);
+    CHECK(zb::kGlPointerlessHostCallCount == 184);
     CHECK(zb::ZB_GL_HC_glActiveTexture == 0);
     CHECK(zb::ZB_GL_HC_glViewport == 141);
     // GLES 3.0 is appended after every other stub library, so the GLES 2.0, AAsset*,
@@ -86,6 +87,12 @@ int main() {
     CHECK(std::strcmp(zb::gl_host_call_name(332), "glRenderbufferStorageMultisampleEXT") == 0);
     CHECK(std::strcmp(zb::gl_host_call_name(343), "glTexStorage3DEXT") == 0);
     CHECK(zb::gl_host_call(344) == nullptr);
+    // GLES 1.1 is the libGLESv1_CM.so block, last in the stub table.
+    CHECK(zb::kGlHostCall1First == 492);
+    CHECK(zb::kGlHostCall1Last == 578);
+    CHECK(std::strcmp(zb::gl_host_call_name(492), "glAlphaFunc") == 0);
+    CHECK(std::strcmp(zb::gl_host_call_name(578), "glVertexPointer") == 0);
+    CHECK(zb::gl_host_call(491) == nullptr && zb::gl_host_call(579) == nullptr);
 
     zb::LibraryRuntime runtime;
     CHECK(runtime.memory().map_anon(kStack, 0x1000, PROT_READ | PROT_WRITE));
