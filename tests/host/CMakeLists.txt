@@ -1,4 +1,5 @@
 set(ZB_HOST_TESTS
+    audio_test
     fault_pc_test
     egl_marshal_test
     configuration_test

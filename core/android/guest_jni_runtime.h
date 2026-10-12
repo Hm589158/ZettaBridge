@@ -6,6 +6,7 @@
 #include <string>
 
 #include "asset_driver_backend.h"
+#include "audio_driver_backend.h"
 #include "configuration_driver_backend.h"
 #include "input_driver_backend.h"
 #include "native_activity_glue.h"
@@ -66,6 +67,7 @@ private:
     AndroidLooperDriverBackend looper_backend_;
     InputDriverBackend input_backend_;
     ConfigurationDriverBackend configuration_backend_;
+    AudioDriverBackend audio_backend_;
     Engine engine_;
     // Built after the engine, because it hands the engine's own units to the framework's
     // callbacks; installed into the engine right after construction.

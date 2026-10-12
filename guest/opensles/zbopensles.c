@@ -1,24 +1,29 @@
-/* Guest libOpenSLES.so: a silent OpenSL ES 1.0.1 + Android extensions implementation.
+/* Guest libOpenSLES.so: OpenSL ES 1.0.1 + Android extensions.
  *
  * Guests link libOpenSLES.so by DT_NEEDED, and one missing library stops the whole guest
  * library from loading. OpenSL ES is an object/interface API (vtables reached through
  * SLObjectItf), not a flat function list, so the generated svc trap stubs cannot serve it.
- * This library implements the objects in guest code and drops the samples:
+ * The objects live here, in guest code; the host only plays (core/include/zb/audio_protocol.h):
  *   - engine, output mix and audio player objects; everything else is FEATURE_UNSUPPORTED;
- *   - buffer queue players consume buffers in real time on a worker thread and call the
- *     buffer queue callback, so games that pace their mixer by the callback keep running;
- *   - URI / Android fd players keep play state and a wall-clock position, report prefetch
- *     SUFFICIENTDATA and an unknown duration, and never reach HEADATEND;
+ *   - a PCM buffer queue player gets its own output thread, which hands each buffer to a host
+ *     AAudio stream and calls the buffer queue callback once the device took it;
+ *   - a URI / Android fd player is a player of the host's own OpenSL ES, which decodes it; the
+ *     worker polls it for prefetch, errors and HEADATEND;
  *   - Android decode-to-buffer-queue players are refused (CONTENT_UNSUPPORTED), since no PCM
  *     would ever arrive.
- * Real output is a later step (host AAudio/AudioTrack); the object model here stays.
+ * Without host audio (zbrun, or a format the host cannot play) a player stays silent: buffer
+ * queues are consumed in real time by the worker, and media players report SUFFICIENTDATA, an
+ * unknown duration and a wall-clock position.
  *
- * Every API call takes one global lock. Callbacks run on the worker thread without it, so
- * they may call back in (Enqueue from the buffer queue callback is the usual pattern). */
+ * Every API call takes one global lock. Callbacks run on the worker or output threads without
+ * it, so they may call back in (Enqueue from the buffer queue callback is the usual pattern). */
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 
+#include "zb/audio_protocol.h"
+
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -38,7 +43,22 @@
 #define SL_ANDROID_DATAFORMAT_PCM_EX ((SLuint32)0x4)
 #endif
 
+#ifndef SL_ANDROID_PCM_REPRESENTATION_FLOAT
+#define SL_ANDROID_PCM_REPRESENTATION_FLOAT ((SLuint32)0x3)
+#endif
+
 #define ZB_EXPORT __attribute__((visibility("default")))
+
+/* Host calls (hostcalls.S: svc #0x5AFAxx, arguments and results in r0-r2 as AAPCS places them). */
+uint32_t zbsl_hc_probe(void);
+uint32_t zbsl_hc_pcm_open(uint32_t sample_rate, uint32_t channels, uint32_t encoding);
+uint32_t zbsl_hc_pcm_write(uint32_t handle, const void *data, uint32_t bytes);
+int32_t zbsl_hc_pcm_control(uint32_t handle, uint32_t op, uint32_t argument);
+uint32_t zbsl_hc_pcm_close(uint32_t handle);
+uint32_t zbsl_hc_media_open(const struct zb_audio_media *media);
+int32_t zbsl_hc_media_control(uint32_t handle, uint32_t op, uint32_t argument);
+uint32_t zbsl_hc_media_query(uint32_t handle, uint32_t what);
+uint32_t zbsl_hc_media_close(uint32_t handle);
 
 /* ---- interface IDs ------------------------------------------------------------------- */
 /* GUID values match Android's libOpenSLES (except where noted), so a guest that carries its
@@ -159,6 +179,7 @@ struct zb_obj {
     uint32_t capacity, count, head;
     uint32_t play_index;
     uint32_t *sizes;
+    const uint8_t **buffers;
     uint32_t bytes_per_second;
     int64_t front_deadline; /* monotonic us when the front buffer is consumed; 0 = not timed */
     int64_t front_remaining; /* paused or stopped with this much of the front buffer left */
@@ -180,6 +201,22 @@ struct zb_obj {
     SLuint32 channel_mute, channel_solo, channels;
     SLmillibel direct_level, send_level;
     SLboolean send_enabled;
+
+    /* host output: a PCM stream (buffer queue) or a host media player (URI / fd) */
+    uint32_t encoding;          /* ZB_AUDIO_ENCODING_*, 0 when the host cannot play the format */
+    uint32_t sample_rate_hz;
+    uint32_t pcm;               /* host stream handle, 0 = silent */
+    uint32_t media;             /* host media handle, 0 = silent */
+    struct zb_audio_media media_source;
+    char *uri;                  /* copy of the URI locator string */
+    uint32_t front_offset;      /* bytes of the front buffer the host already played */
+    uint32_t queue_generation;  /* bumped by Clear and STOPPED: a write in flight is stale */
+    pthread_t out_thread;
+    pthread_cond_t out_wake;
+    int out_running, closing, out_in_callback;
+    int64_t next_poll;          /* media: next host status poll, monotonic us */
+    int host_prefetched, host_error;
+    SLmillisecond host_duration;
 };
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -189,6 +226,7 @@ static zb_obj *g_objects;
 static zb_obj *g_in_callback;
 static pthread_t g_worker;
 static int g_worker_started;
+static int g_host_audio = -1; /* -1 not probed yet, 0 silent, 1 host output available */
 
 static zb_obj *owner_of(const void *self) {
     return self ? (*(zb_itf *const *)&self)->owner : NULL;
@@ -209,6 +247,126 @@ static void log_once(int *flag, const char *what) {
 
 static void *worker_main(void *arg);
 
+static void free_object(zb_obj *o) {
+    if (o->kind == KIND_PLAYER) pthread_cond_destroy(&o->out_wake);
+    free(o->sizes);
+    free(o->buffers);
+    free(o->uri);
+    free(o);
+}
+
+/* Linear gain from the volume interface: level in millibels, mute silences. */
+static float player_gain(const zb_obj *p) {
+    if (p->mute) return 0.0f;
+    if (p->volume_level <= SL_MILLIBEL_MIN) return 0.0f;
+    return powf(10.0f, (float)p->volume_level / 2000.0f);
+}
+
+/* Caller holds g_lock. */
+static void push_gain(zb_obj *p) {
+    float gain = player_gain(p);
+    uint32_t bits;
+    memcpy(&bits, &gain, sizeof bits);
+    if (p->pcm) zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_GAIN, bits);
+    if (p->media) zbsl_hc_media_control(p->media, ZB_AUDIO_OP_GAIN, bits);
+}
+
+/* Caller holds g_lock. */
+static int host_audio_available(void) {
+    if (g_host_audio < 0) g_host_audio = zbsl_hc_probe() == ZB_AUDIO_PROBE_MAGIC;
+    return g_host_audio;
+}
+
+static int64_t buffer_duration_us(const zb_obj *p, uint32_t size);
+
+/* One per PCM buffer queue player with a host stream. The host write blocks while the device
+ * plays, so this thread is the player's clock: a buffer is dequeued, and its callback called,
+ * once the device took all of it. Pause, flush and close make a write return early; the part
+ * already played is remembered in front_offset. */
+static void *pcm_thread(void *arg) {
+    zb_obj *p = arg;
+    pthread_mutex_lock(&g_lock);
+    while (!p->closing) {
+        if (p->play_state != SL_PLAYSTATE_PLAYING || p->count == 0) {
+            pthread_cond_wait(&p->out_wake, &g_lock);
+            continue;
+        }
+        const uint32_t index = p->head;
+        const uint8_t *buffer = p->buffers[index];
+        const uint32_t size = p->sizes[index];
+        const uint32_t offset = p->front_offset;
+        const uint32_t generation = p->queue_generation;
+        const uint32_t pcm = p->pcm;
+        pthread_mutex_unlock(&g_lock);
+        uint32_t written = zbsl_hc_pcm_write(pcm, buffer + offset, size - offset);
+        pthread_mutex_lock(&g_lock);
+        if (p->closing) break;
+        if (generation != p->queue_generation) continue; /* cleared or stopped meanwhile */
+        if (written > size - offset) written = size - offset;
+        p->front_offset += written;
+        if (p->front_offset < size) {
+            /* Interrupted by a pause. A write that took nothing while still playing would spin. */
+            if (written == 0 && p->play_state == SL_PLAYSTATE_PLAYING) {
+                pthread_mutex_unlock(&g_lock);
+                struct timespec ts = {0, 5000000};
+                nanosleep(&ts, NULL);
+                pthread_mutex_lock(&g_lock);
+            }
+            continue;
+        }
+        p->front_offset = 0;
+        p->position_us += buffer_duration_us(p, size);
+        p->head = (p->head + 1) % p->capacity;
+        p->count--;
+        p->play_index++;
+        if (p->bq_cb) {
+            slBufferQueueCallback cb = p->bq_cb;
+            void *ctx = p->bq_cb_ctx;
+            const void *caller = p->bq_caller;
+            p->out_in_callback = 1;
+            pthread_mutex_unlock(&g_lock);
+            cb((SLBufferQueueItf)caller, ctx);
+            pthread_mutex_lock(&g_lock);
+            p->out_in_callback = 0;
+        }
+    }
+    /* The worker may be inside a callback of this player; it must finish before anyone frees. */
+    while (g_in_callback == p) pthread_cond_wait(&g_callback_done, &g_lock);
+    p->out_running = 0;
+    const int free_self = p->free_after_callback;
+    pthread_cond_broadcast(&g_callback_done);
+    pthread_mutex_unlock(&g_lock);
+    if (free_self) free_object(p);
+    return NULL;
+}
+
+/* Opens the host side of a player at Realize. Caller holds g_lock. A player the host cannot
+ * play stays silent rather than failing: the game keeps running either way. */
+static void open_host_output(zb_obj *p) {
+    if (p->kind != KIND_PLAYER || !host_audio_available()) return;
+    if (p->source == SOURCE_BUFFERQUEUE) {
+        if (p->encoding == 0) return;
+        p->pcm = zbsl_hc_pcm_open(p->sample_rate_hz, p->channels, p->encoding);
+        if (!p->pcm) return;
+        p->out_running = 1;
+        if (pthread_create(&p->out_thread, NULL, pcm_thread, p) != 0) {
+            p->out_running = 0;
+            zbsl_hc_pcm_close(p->pcm);
+            p->pcm = 0;
+            return;
+        }
+        pthread_detach(p->out_thread);
+    } else {
+        if (p->media_source.kind == 0) return;
+        if (p->media_source.kind == ZB_AUDIO_MEDIA_URI) p->media_source.uri = (uint32_t)(uintptr_t)p->uri;
+        p->media = zbsl_hc_media_open(&p->media_source);
+        if (!p->media) return;
+        p->host_duration = SL_TIME_UNKNOWN;
+        if (p->loop_enabled) zbsl_hc_media_control(p->media, ZB_AUDIO_OP_LOOP, 1);
+    }
+    push_gain(p);
+}
+
 /* Caller holds g_lock. */
 static SLresult ensure_worker(void) {
     if (g_worker_started) return SL_RESULT_SUCCESS;
@@ -225,6 +383,7 @@ static int64_t buffer_duration_us(const zb_obj *p, uint32_t size) {
 }
 
 static SLmillisecond player_position_ms(const zb_obj *p, int64_t now) {
+    if (p->media) return zbsl_hc_media_query(p->media, ZB_AUDIO_QUERY_POSITION);
     int64_t us = p->position_us;
     if (p->source == SOURCE_MEDIA && p->play_state == SL_PLAYSTATE_PLAYING) us += now - p->clock_start;
     return (SLmillisecond)(us / 1000);
@@ -235,7 +394,10 @@ typedef struct {
     zb_obj *obj;
 } zb_event;
 
-enum { EV_NONE, EV_REALIZE, EV_PREFETCH, EV_BUFFER, EV_MARKER, EV_NEWPOS };
+enum { EV_NONE, EV_REALIZE, EV_PREFETCH, EV_BUFFER, EV_MARKER, EV_NEWPOS, EV_HEADATEND };
+
+/* How often the worker asks a host media player for prefetch, error and end of content. */
+#define MEDIA_POLL_US 20000
 
 /* Finds one due event and updates the state it consumes. Caller holds g_lock. Returns the
  * wait in microseconds until the next timed event (-1: nothing timed) when none is due. */
@@ -249,6 +411,28 @@ static zb_event next_event(int64_t now, int64_t *wait) {
             if (o->object_cb) return (zb_event){EV_REALIZE, o};
         }
         if (o->kind != KIND_PLAYER || o->state != SL_OBJECT_STATE_REALIZED) continue;
+        if (o->media && now >= o->next_poll) {
+            o->next_poll = now + MEDIA_POLL_US;
+            const uint32_t status = zbsl_hc_media_query(o->media, ZB_AUDIO_QUERY_STATUS);
+            if ((status & ZB_AUDIO_STATUS_ERROR) && !o->host_error) {
+                /* Android reports content it cannot play as an underflow with nothing buffered. */
+                o->host_error = 1;
+                o->prefetch_event = 1;
+            } else if ((status & ZB_AUDIO_STATUS_PREFETCHED) && !o->host_prefetched) {
+                o->host_prefetched = 1;
+                o->host_duration = zbsl_hc_media_query(o->media, ZB_AUDIO_QUERY_DURATION);
+                o->prefetch_event = 1;
+            }
+            if (status & ZB_AUDIO_STATUS_ENDED) {
+                /* The host player went to PAUSED at the end, as the specification says. */
+                if (o->play_state == SL_PLAYSTATE_PLAYING) o->play_state = SL_PLAYSTATE_PAUSED;
+                if (o->play_cb && (o->play_mask & SL_PLAYEVENT_HEADATEND)) return (zb_event){EV_HEADATEND, o};
+            }
+        }
+        if (o->media && (o->play_state != SL_PLAYSTATE_STOPPED || !o->host_prefetched)) {
+            int64_t w = o->next_poll - now;
+            if (*wait < 0 || w < *wait) *wait = w < 0 ? 0 : w;
+        }
         if (o->prefetch_event) {
             o->prefetch_event = 0;
             if (o->prefetch_cb && (o->prefetch_mask & (SL_PREFETCHEVENT_STATUSCHANGE |
@@ -256,7 +440,8 @@ static zb_event next_event(int64_t now, int64_t *wait) {
                 return (zb_event){EV_PREFETCH, o};
         }
         if (o->play_state != SL_PLAYSTATE_PLAYING) continue;
-        if (o->source == SOURCE_BUFFERQUEUE && o->count > 0 && o->front_deadline != 0) {
+        /* A buffer queue with a host stream is consumed by its own output thread. */
+        if (o->source == SOURCE_BUFFERQUEUE && !o->pcm && o->count > 0 && o->front_deadline != 0) {
             if (now >= o->front_deadline) {
                 int64_t done = buffer_duration_us(o, o->sizes[o->head]);
                 o->position_us += done;
@@ -346,7 +531,9 @@ static void *worker_main(void *arg) {
         default: {
             slPlayCallback cb = o->play_cb;
             void *ctx = o->play_cb_ctx;
-            SLuint32 event = ev.type == EV_MARKER ? SL_PLAYEVENT_HEADATMARKER : SL_PLAYEVENT_HEADATNEWPOS;
+            SLuint32 event = ev.type == EV_MARKER   ? SL_PLAYEVENT_HEADATMARKER
+                             : ev.type == EV_NEWPOS ? SL_PLAYEVENT_HEADATNEWPOS
+                                                    : SL_PLAYEVENT_HEADATEND;
             pthread_mutex_unlock(&g_lock);
             cb((SLPlayItf)&o->play, ctx, event);
             break;
@@ -354,10 +541,8 @@ static void *worker_main(void *arg) {
         }
         pthread_mutex_lock(&g_lock);
         g_in_callback = NULL;
-        if (o->free_after_callback) {
-            free(o->sizes);
-            free(o);
-        }
+        /* With an output thread still running, that thread frees the player when it exits. */
+        if (o->free_after_callback && !o->out_running) free_object(o);
         pthread_cond_broadcast(&g_callback_done);
     }
     return NULL;
@@ -376,7 +561,9 @@ static SLresult obj_Realize(SLObjectItf self, SLboolean async) {
         r = SL_RESULT_PRECONDITIONS_VIOLATED;
     } else {
         o->state = SL_OBJECT_STATE_REALIZED;
-        if (async) {
+        open_host_output(o);
+        if (o->media) r = ensure_worker();
+        if (async && r == SL_RESULT_SUCCESS) {
             o->realize_event = 1;
             r = ensure_worker();
             pthread_cond_signal(&g_wake);
@@ -439,16 +626,29 @@ static void obj_Destroy(SLObjectItf self) {
             break;
         }
     }
-    if (g_in_callback == o && g_worker_started && pthread_equal(pthread_self(), g_worker)) {
-        /* Destroyed from inside its own callback: free once the callback returns. */
+    if (o->media) {
+        zbsl_hc_media_close(o->media);
+        o->media = 0;
+    }
+    if (o->pcm) {
+        /* The output thread leaves its loop; closing the stream ends a write in flight. */
+        o->closing = 1;
+        pthread_cond_signal(&o->out_wake);
+        zbsl_hc_pcm_close(o->pcm);
+        o->pcm = 0;
+    }
+    const pthread_t current = pthread_self();
+    if ((g_in_callback == o && g_worker_started && pthread_equal(current, g_worker)) ||
+        (o->out_running && o->out_in_callback && pthread_equal(current, o->out_thread))) {
+        /* Destroyed from inside its own callback: whichever thread finishes last frees it. */
         o->free_after_callback = 1;
         pthread_mutex_unlock(&g_lock);
         return;
     }
-    while (g_in_callback == o) pthread_cond_wait(&g_callback_done, &g_lock);
+    /* Like the platform, Destroy returns only once no callback of the object is running. */
+    while (g_in_callback == o || o->out_running) pthread_cond_wait(&g_callback_done, &g_lock);
     pthread_mutex_unlock(&g_lock);
-    free(o->sizes);
-    free(o);
+    free_object(o);
 }
 
 static SLresult obj_SetPriority(SLObjectItf self, SLint32 priority, SLboolean preemptable) {
@@ -530,11 +730,28 @@ static SLresult play_SetPlayState(SLPlayItf self, SLuint32 state) {
             p->front_remaining = 0;
         }
     }
-    if (state != SL_PLAYSTATE_STOPPED && p->source == SOURCE_MEDIA && !p->prefetched) {
+    if (state != SL_PLAYSTATE_STOPPED && p->source == SOURCE_MEDIA && !p->media && !p->prefetched) {
         p->prefetched = 1;
         p->prefetch_event = 1;
     }
     p->play_state = state;
+    if (p->pcm) {
+        if (state == SL_PLAYSTATE_PLAYING) {
+            zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_START, 0);
+        } else if (state == SL_PLAYSTATE_PAUSED) {
+            zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_PAUSE, 0);
+        } else {
+            /* Stopping keeps the queue but restarts its front buffer. */
+            zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_FLUSH, 0);
+            p->queue_generation++;
+            p->front_offset = 0;
+        }
+        pthread_cond_signal(&p->out_wake);
+    }
+    if (p->media) {
+        zbsl_hc_media_control(p->media, ZB_AUDIO_OP_PLAY_STATE, state);
+        p->next_poll = 0;
+    }
     SLresult r = ensure_worker();
     pthread_cond_signal(&g_wake);
     UNLOCK_RETURN(r);
@@ -549,9 +766,14 @@ static SLresult play_GetPlayState(SLPlayItf self, SLuint32 *state) {
 
 static SLresult play_GetDuration(SLPlayItf self, SLmillisecond *msec) {
     if (!msec) return SL_RESULT_PARAMETER_INVALID;
-    (void)self;
+    LOCKED_PLAYER(self);
     *msec = SL_TIME_UNKNOWN;
-    return SL_RESULT_SUCCESS;
+    if (p->media) {
+        if (p->host_duration == SL_TIME_UNKNOWN)
+            p->host_duration = zbsl_hc_media_query(p->media, ZB_AUDIO_QUERY_DURATION);
+        *msec = p->host_duration;
+    }
+    UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 
 static SLresult play_GetPosition(SLPlayItf self, SLmillisecond *msec) {
@@ -644,9 +866,13 @@ static SLresult bq_enqueue(const void *self, const void *buffer, SLuint32 size) 
     if (!buffer || size == 0) return SL_RESULT_PARAMETER_INVALID;
     LOCKED_PLAYER(self);
     if (p->count >= p->capacity) UNLOCK_RETURN(SL_RESULT_BUFFER_INSUFFICIENT);
-    p->sizes[(p->head + p->count) % p->capacity] = size;
+    const uint32_t slot = (p->head + p->count) % p->capacity;
+    p->sizes[slot] = size;
+    p->buffers[slot] = buffer;
     p->count++;
-    if (p->count == 1 && p->play_state == SL_PLAYSTATE_PLAYING) {
+    if (p->pcm) {
+        pthread_cond_signal(&p->out_wake);
+    } else if (p->count == 1 && p->play_state == SL_PLAYSTATE_PLAYING) {
         p->front_deadline = now_us() + buffer_duration_us(p, size);
         pthread_cond_signal(&g_wake);
     }
@@ -658,6 +884,13 @@ static SLresult bq_clear(const void *self) {
     p->count = 0;
     p->front_deadline = 0;
     p->front_remaining = 0;
+    if (p->pcm) {
+        /* Drop what the device still holds; a write in flight returns and is discarded. */
+        zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_FLUSH, 0);
+        if (p->play_state == SL_PLAYSTATE_PLAYING) zbsl_hc_pcm_control(p->pcm, ZB_AUDIO_OP_START, 0);
+        p->queue_generation++;
+        p->front_offset = 0;
+    }
     UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 
@@ -723,6 +956,7 @@ static SLresult vol_SetVolumeLevel(SLVolumeItf self, SLmillibel level) {
     if (level > 0) return SL_RESULT_PARAMETER_INVALID;
     LOCKED_PLAYER(self);
     p->volume_level = level;
+    push_gain(p);
     UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult vol_GetVolumeLevel(SLVolumeItf self, SLmillibel *level) {
@@ -740,6 +974,7 @@ static SLresult vol_GetMaxVolumeLevel(SLVolumeItf self, SLmillibel *level) {
 static SLresult vol_SetMute(SLVolumeItf self, SLboolean mute) {
     LOCKED_PLAYER(self);
     p->mute = mute ? SL_BOOLEAN_TRUE : SL_BOOLEAN_FALSE;
+    push_gain(p);
     UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult vol_GetMute(SLVolumeItf self, SLboolean *mute) {
@@ -794,6 +1029,7 @@ static SLresult seek_SetPosition(SLSeekItf self, SLmillisecond pos, SLuint32 mod
     if (p->play_state == SL_PLAYSTATE_PLAYING) p->clock_start = now;
     p->marker_fired = p->marker_set && pos > p->marker;
     if (p->update_period) p->next_newpos = (pos / p->update_period + 1) * p->update_period;
+    if (p->media) zbsl_hc_media_control(p->media, ZB_AUDIO_OP_SEEK, pos);
     UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult seek_SetLoop(SLSeekItf self, SLboolean enable, SLmillisecond start, SLmillisecond end) {
@@ -802,6 +1038,7 @@ static SLresult seek_SetLoop(SLSeekItf self, SLboolean enable, SLmillisecond sta
     p->loop_enabled = enable ? SL_BOOLEAN_TRUE : SL_BOOLEAN_FALSE;
     p->loop_start = start;
     p->loop_end = end;
+    if (p->media) zbsl_hc_media_control(p->media, ZB_AUDIO_OP_LOOP, p->loop_enabled ? 1 : 0);
     UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult seek_GetLoop(SLSeekItf self, SLboolean *enable, SLmillisecond *start, SLmillisecond *end) {
@@ -821,17 +1058,19 @@ static const struct SLSeekItf_ seek_vtable = {
 
 /* ---- SLPrefetchStatusItf ------------------------------------------------------------- */
 
+/* A host media player reports what its decoder reached; a silent one always has everything. */
 static SLresult pf_GetPrefetchStatus(SLPrefetchStatusItf self, SLuint32 *status) {
-    (void)self;
     if (!status) return SL_RESULT_PARAMETER_INVALID;
-    *status = SL_PREFETCHSTATUS_SUFFICIENTDATA;
-    return SL_RESULT_SUCCESS;
+    LOCKED_PLAYER(self);
+    *status = !p->media || (p->host_prefetched && !p->host_error) ? SL_PREFETCHSTATUS_SUFFICIENTDATA
+                                                                  : SL_PREFETCHSTATUS_UNDERFLOW;
+    UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult pf_GetFillLevel(SLPrefetchStatusItf self, SLpermille *level) {
-    (void)self;
     if (!level) return SL_RESULT_PARAMETER_INVALID;
-    *level = 1000;
-    return SL_RESULT_SUCCESS;
+    LOCKED_PLAYER(self);
+    *level = !p->media || (p->host_prefetched && !p->host_error) ? 1000 : 0;
+    UNLOCK_RETURN(SL_RESULT_SUCCESS);
 }
 static SLresult pf_RegisterCallback(SLPrefetchStatusItf self, slPrefetchCallback cb, void *ctx) {
     LOCKED_PLAYER(self);
@@ -1207,16 +1446,51 @@ static SLresult eng_CreateAudioPlayer(SLEngineItf self, SLObjectItf *out, SLData
         p->capacity = bq->numBuffers;
         p->bytes_per_second = bytes > 0 && bytes < UINT32_MAX ? (uint32_t)bytes : 0;
         p->channels = pcm->numChannels;
+        p->sample_rate_hz = pcm->samplesPerSec / 1000;
+        /* What the host can play: 8-bit unsigned and 16-bit signed integers, 32-bit floats. */
+        /* SLAndroidDataFormat_PCM_EX is SLDataFormat_PCM plus a trailing representation word. */
+        const int is_float = pcm->formatType == SL_ANDROID_DATAFORMAT_PCM_EX &&
+                             ((const SLuint32 *)pcm)[7] == SL_ANDROID_PCM_REPRESENTATION_FLOAT;
+        if (pcm->endianness != SL_BYTEORDER_BIGENDIAN) {
+            if (pcm->bitsPerSample == 8 && container == 8 && !is_float) p->encoding = ZB_AUDIO_ENCODING_U8;
+            if (pcm->bitsPerSample == 16 && container == 16 && !is_float) p->encoding = ZB_AUDIO_ENCODING_S16;
+            if (pcm->bitsPerSample == 32 && container == 32 && is_float) p->encoding = ZB_AUDIO_ENCODING_FLOAT;
+        }
         p->sizes = calloc(p->capacity, sizeof(*p->sizes));
-        if (!p->sizes || p->bytes_per_second == 0) {
-            SLresult r = p->sizes ? SL_RESULT_CONTENT_UNSUPPORTED : SL_RESULT_MEMORY_FAILURE;
+        p->buffers = calloc(p->capacity, sizeof(*p->buffers));
+        if (!p->sizes || !p->buffers || p->bytes_per_second == 0) {
+            SLresult r = p->sizes && p->buffers ? SL_RESULT_CONTENT_UNSUPPORTED : SL_RESULT_MEMORY_FAILURE;
             free(p->sizes);
+            free(p->buffers);
             free(p);
             return r;
         }
     } else if (locator == SL_DATALOCATOR_URI || locator == SL_DATALOCATOR_ANDROIDFD ||
                locator == SL_DATALOCATOR_ADDRESS) {
         p->source = SOURCE_MEDIA;
+        /* Remembered for Realize, where the host player is created: the locator itself is the
+         * caller's and may be gone by then. An address source stays silent. */
+        if (locator == SL_DATALOCATOR_ANDROIDFD) {
+            const SLDataLocator_AndroidFD *fd = src->pLocator;
+            const uint64_t offset = (uint64_t)fd->offset;
+            const uint64_t length = (uint64_t)fd->length;
+            p->media_source.kind = ZB_AUDIO_MEDIA_FD;
+            p->media_source.fd = fd->fd;
+            p->media_source.offset_lo = (uint32_t)offset;
+            p->media_source.offset_hi = (uint32_t)(offset >> 32);
+            p->media_source.length_lo = (uint32_t)length;
+            p->media_source.length_hi = (uint32_t)(length >> 32);
+        } else if (locator == SL_DATALOCATOR_URI) {
+            const SLDataLocator_URI *uri = src->pLocator;
+            if (uri->URI) {
+                p->uri = strdup((const char *)uri->URI);
+                if (!p->uri) {
+                    free(p);
+                    return SL_RESULT_MEMORY_FAILURE;
+                }
+                p->media_source.kind = ZB_AUDIO_MEDIA_URI;
+            }
+        }
     } else {
         log_once(&g_warned_source, "audio player data source");
         free(p);
@@ -1234,6 +1508,7 @@ static SLresult eng_CreateAudioPlayer(SLEngineItf self, SLObjectItf *out, SLData
     INIT_ITF(p, effectsend, effectsend_vtable);
     INIT_ITF(p, androideffectsend, androideffectsend_vtable);
     INIT_ITF(p, config, config_vtable);
+    pthread_cond_init(&p->out_wake, NULL);
     p->play_state = SL_PLAYSTATE_STOPPED;
     p->update_period = 1000;
     p->next_newpos = 1000;
@@ -1242,8 +1517,7 @@ static SLresult eng_CreateAudioPlayer(SLEngineItf self, SLObjectItf *out, SLData
 
     SLresult r = check_interfaces(p, n, ids, req);
     if (r != SL_RESULT_SUCCESS) {
-        free(p->sizes);
-        free(p);
+        free_object(p);
         return r;
     }
     publish_object(p, out);

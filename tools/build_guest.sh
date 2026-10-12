@@ -13,7 +13,7 @@
 #   guest/zbjni/zbjni.c         -> build/guest/lib/libzbjni.so (guest JNIEnv/JavaVM)
 #   guest/stubs/gen/*.S         -> build/guest/lib/<lib>.so host-call stub libraries
 #   guest/compat/zbcompat.c     -> build/guest/lib/libzbcompat.so
-#   guest/opensles/zbopensles.c -> build/guest/lib/libOpenSLES.so (silent OpenSL ES)
+#   guest/opensles/zbopensles.c -> build/guest/lib/libOpenSLES.so (OpenSL ES over host audio)
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -97,9 +97,9 @@ done
 # OpenSL ES is an interface/vtable API, so it is implemented in guest code rather than as
 # trap stubs. It must export everything the platform library does: one missing SL_IID_*
 # would stop a guest library from loading.
-"$CC" -shared -fPIC -O2 -Wall -Wextra -fvisibility=hidden -Wl,-soname,libOpenSLES.so \
+"$CC" -shared -fPIC -O2 -Wall -Wextra -fvisibility=hidden -I"$ROOT/core/include" -Wl,-soname,libOpenSLES.so \
     -Wl,--version-script,"$ROOT/guest/opensles/libOpenSLES.map.txt" \
-    -o "$OUT/lib/libOpenSLES.so" "$ROOT/guest/opensles/zbopensles.c" -llog
+    -o "$OUT/lib/libOpenSLES.so" "$ROOT/guest/opensles/zbopensles.c" "$ROOT/guest/opensles/hostcalls.S" -llog -lm
 python3 "$ROOT/tools/check_opensles_exports.py" "$TOOLCHAIN/bin/llvm-nm" \
     "$TOOLCHAIN/sysroot/usr/lib/arm-linux-androideabi/21/libOpenSLES.so" "$OUT/lib/libOpenSLES.so"
 
