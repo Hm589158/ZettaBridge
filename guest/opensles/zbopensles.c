@@ -41,8 +41,8 @@
 #define ZB_EXPORT __attribute__((visibility("default")))
 
 /* ---- interface IDs ------------------------------------------------------------------- */
-/* GUID values match Android's libOpenSLES, so a guest that carries its own copy of an IID
- * still compares equal. */
+/* GUID values match Android's libOpenSLES (except where noted), so a guest that carries its
+ * own copy of an IID still compares equal. */
 
 #define ZB_GUID_TAIL 0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b
 #define ZB_IID(name, a, b, c, d, ...) \
@@ -99,6 +99,11 @@ ZB_IID(ANDROIDEFFECTSEND, 0x7be462c0, 0xbc43, 0x11df, 0x8670, ZB_GUID_TAIL)
 ZB_IID(ANDROIDCONFIGURATION, 0x89f6a7e0, 0xbeac, 0x11df, 0x8b5c, ZB_GUID_TAIL)
 ZB_IID(ANDROIDSIMPLEBUFFERQUEUE, 0x198e4940, 0xc5d7, 0x11df, 0xa2a6, ZB_GUID_TAIL)
 ZB_IID(ANDROIDBUFFERQUEUESOURCE, 0x7fc1a460, 0xeec1, 0x11df, 0xa306, ZB_GUID_TAIL)
+/* Recorder pre-processing interfaces from newer NDKs. Their platform GUIDs were not at hand,
+ * so these values are our own; no object here exposes them (recorders are refused). */
+ZB_IID(ANDROIDACOUSTICECHOCANCELLATION, 0x7a620001, 0x5a42, 0x4f53, 0x8001, 0x7a, 0x62, 0x73, 0x6c, 0x65, 0x73)
+ZB_IID(ANDROIDAUTOMATICGAINCONTROL, 0x7a620002, 0x5a42, 0x4f53, 0x8002, 0x7a, 0x62, 0x73, 0x6c, 0x65, 0x73)
+ZB_IID(ANDROIDNOISESUPPRESSION, 0x7a620003, 0x5a42, 0x4f53, 0x8003, 0x7a, 0x62, 0x73, 0x6c, 0x65, 0x73)
 
 static int iid_is(SLInterfaceID iid, SLInterfaceID known) {
     return iid != NULL && (iid == known || memcmp(iid, known, sizeof(*known)) == 0);
