@@ -1,3 +1,4 @@
+
 name: Build ZettaBridge ARM64 APK
 
 on:
@@ -18,11 +19,12 @@ concurrency:
 
 jobs:
   build:
-    # ZettaBridge's native host tools and its pinned NDK require aarch64 Linux.
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+
     env:
-      NDK_HOST: linux-arm64
+      NDK_HOST: linux-x86_64
+
     steps:
       - name: Checkout with Dynarmic submodule
         uses: actions/checkout@v4
@@ -56,7 +58,10 @@ jobs:
           sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
           echo "NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
           NDK="$ANDROID_HOME/ndk/29.0.14206865"
-          test -x "$NDK/toolchains/llvm/prebuilt/linux-arm64/bin/clang" || { echo 'NDK r29 linux-arm64 toolchain unavailable on this runner. Check NDK version/support.'; exit 1; }
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" || {
+            echo 'NDK r29 linux-x86_64 toolchain unavailable.'
+            exit 1
+          }
 
       - name: Apply upstream Dynarmic patches
         run: |
@@ -78,10 +83,14 @@ jobs:
           ln -sfn /usr/include/boost build/boost-headers/boost
           cmake -S . -B build/android-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
-            -DCMAKE_BUILD_TYPE=Release -DZB_BUILD_TESTS=OFF \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DZB_BUILD_TESTS=OFF \
             -DBoost_INCLUDE_DIR="$GITHUB_WORKSPACE/build/boost-headers"
+
           ninja -C build/android-arm64 zbridge
+
           test -f build/android-arm64/core/libzbridge.so
           test -f build/android-arm64/core/libzbproxy.so
 
@@ -89,7 +98,6 @@ jobs:
         run: sh tools/make_launcher_bundle.sh
 
       - name: Build installable debug APK
-        # Debug APK is signed with the automatically generated Android debug key.
         working-directory: android/launcher
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
@@ -98,6 +106,7 @@ jobs:
           APK="$(find android/launcher/app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -type f | head -n 1)"
           test -n "$APK"
           python3 tools/check_launcher_apk.py "$APK"
+
           mkdir -p dist
           cp "$APK" dist/ZettaBridge-PocketArmy-test.apk
           sha256sum dist/ZettaBridge-PocketArmy-test.apk > dist/SHA256SUMS.txt
@@ -108,7 +117,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="pocketarmy-test-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/ZettaBridge-PocketArmy-test.apk dist/SHA256SUMS.txt \
+
+          gh release create "$TAG" \
+            dist/ZettaBridge-PocketArmy-test.apk \
+            dist/SHA256SUMS.txt \
             --title "ZettaBridge Pocket Army test #${GITHUB_RUN_NUMBER}" \
             --notes "Experimental debug-signed APK for testing GLES1 loading. Packaging audit passed; Pocket Army compatibility is not confirmed." \
-            --prerelease --target "$GITHUB_SHA"
+            --prerelease \
+            --target "$GITHUB_SHA"
+            
