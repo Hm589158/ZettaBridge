@@ -56,6 +56,12 @@ final class GuestInstrumentation extends Instrumentation {
     }
 
     @Override
+    public void callActivityOnResume(Activity activity) {
+        base.callActivityOnResume(activity);
+        GuestWindowStyle.afterResume(activity);
+    }
+
+    @Override
     public void callActivityOnDestroy(Activity activity) {
         base.callActivityOnDestroy(activity);
         runtime.onActivityDestroyed(activity);
