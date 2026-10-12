@@ -344,9 +344,11 @@ functions. Accept: the game is playable start to finish.
   (`tools/check_opensles_exports.py`); `opensles_dynamic` and `audio_test` cover the behavior.
 - **Host-call indices `0xFA00-0xFAFF` belong to audio** (`audio_protocol.h`); generated stub
   indices stay below `0xFA00`.
-- **Translated guests get a 60 Hz display mode** (`GuestWindowStyle.limitRefreshRate`). Old
-  games step their world once per frame; on the 120 Hz OnePlus 13 panel Pocket Army ran at double
-  speed.
+- **Translated guests run at 60 fps.** Old games step their world once per frame; at 120 Hz
+  Pocket Army ran at double speed. `GuestWindowStyle.limitRefreshRate` asks for a 60 Hz display
+  mode, which HyperOS (Redmi Note 15 Pro+) ignores, so `FramePacer` also wraps the game's
+  `GLSurfaceView.mRenderer` and holds `onDrawFrame` to 60 Hz slots. Android clamps
+  `eglSwapInterval` to 1, so swap intervals cannot do it.
 - **JNI tables and host-call lists are generated.** `tools/gen_jni.py` writes
   `core/include/zb/jni_hostcalls.h`, `core/src/gen/jni_hostcalls.inc` and `guest/zbjni/gen/*`;
   never edit them by hand. `gen_jni_check` (ctest) fails when they are stale.

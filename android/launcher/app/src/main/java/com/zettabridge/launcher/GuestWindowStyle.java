@@ -11,6 +11,10 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+
 /**
  * Applies a plugin activity's window decoration the way the plugin's own theme asks for it.
  *
@@ -22,6 +26,9 @@ import android.view.WindowManager;
  */
 final class GuestWindowStyle {
     private static final String TAG = "zb-launcher";
+
+    /** Activities of translated (32-bit) plugins, recorded by apply() before their onCreate. */
+    private static final Set<Activity> translatedActivities = Collections.newSetFromMap(new WeakHashMap<>());
 
     private GuestWindowStyle() {}
 
@@ -43,6 +50,7 @@ final class GuestWindowStyle {
     static void afterCreate(Activity activity) {
         Window window = activity.getWindow();
         if (window == null) return;
+        if (translatedActivities.contains(activity)) FramePacer.watch(activity);
         final int flags = window.getAttributes().flags;
         if ((flags & WindowManager.LayoutParams.FLAG_FULLSCREEN) == 0) return;
         if (activity.getActionBar() != null) activity.getActionBar().hide();
@@ -73,7 +81,10 @@ final class GuestWindowStyle {
             Log.w(TAG, "cannot read the plugin window theme: " + e);
         }
 
-        if (translated) limitRefreshRate(activity);
+        if (translated) {
+            translatedActivities.add(activity);
+            limitRefreshRate(activity);
+        }
 
         // Requesting it here is the only thing that works: the feature has to be set before the
         // plugin's onCreate calls setContentView. A translated plugin is an old game, and those
@@ -99,8 +110,14 @@ final class GuestWindowStyle {
         });
     }
 
+    /** A resumed translated guest may have built its GLSurfaceView since onCreate. */
+    static void afterResume(Activity activity) {
+        if (translatedActivities.contains(activity)) FramePacer.watch(activity);
+    }
+
     /**
-     * Asks for a 60 Hz display mode while a translated guest is in front.
+     * Asks for a 60 Hz display mode while a translated guest is in front. Some systems (HyperOS)
+     * ignore it, so FramePacer holds the renderer to 60 fps as well.
      *
      * The 32-bit games we translate were written for 60 Hz screens, and many step their world once
      * per rendered frame instead of by elapsed time. On a 120 Hz panel GLSurfaceView renders twice
